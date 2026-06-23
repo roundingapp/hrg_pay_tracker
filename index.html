@@ -905,6 +905,8 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [dayDate, setDayDate] = useState(todayISO());
+  const [sortKey, setSortKey] = useState(null);     // roll-up table column sort; null = roster order
+  const [sortDir, setSortDir] = useState("desc");
   const [calY, setCalY] = useState(parseDate(todayISO()).getFullYear());
   const [calM, setCalM] = useState(parseDate(todayISO()).getMonth());   // 0-11
 
@@ -948,6 +950,25 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
   const totalConsults = rows.reduce((s,r)=>s+r.counts.consults,0);
   const totalFollow = rows.reduce((s,r)=>s+r.counts.followups,0);
   const totalOther = rows.reduce((s,r)=>s+r.otherAmt,0);
+
+  // sortable roll-up table: click a header to sort (asc → desc → back to roster order)
+  const sortVal = (r, k) => k==="name" ? String(r.emp.name||"").toLowerCase()
+    : k==="pay" ? r.pay : k==="other" ? r.otherAmt : (r.counts[k]||0);
+  const sortedRows = sortKey
+    ? [...rows].sort((a,b) => { const va=sortVal(a,sortKey), vb=sortVal(b,sortKey);
+        const cmp = typeof va==="string" ? va.localeCompare(vb) : (va-vb); return sortDir==="asc"?cmp:-cmp; })
+    : rows;
+  const sortBy = (k) => {
+    const firstDir = k==="name" ? "asc" : "desc";
+    if (sortKey !== k) { setSortKey(k); setSortDir(firstDir); }
+    else if (sortDir === firstDir) setSortDir(firstDir==="asc"?"desc":"asc");
+    else setSortKey(null);   // third click clears back to roster order
+  };
+  const sortTh = (k, label, num) => (
+    <th className={num ? "num" : ""} onClick={()=>sortBy(k)} style={{cursor:"pointer", userSelect:"none", whiteSpace:"nowrap"}}>
+      {label}{sortKey===k ? (sortDir==="asc" ? " ▲" : " ▼") : ""}
+    </th>
+  );
 
   // ----- day-view month calendar -----
   const empById = (id) => employees.find(x=>x.id===id);
@@ -1097,17 +1118,17 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
         <table>
           <thead>
             <tr>
-              <th>Employee</th>
-              <th className="num">Cons</th><th className="num">F/U</th>
-              <th className="num">Clinic pts</th>
-              <th className="num">Per diem</th><th className="num">Notes</th>
-              <th className="num">Clinic hr</th><th className="num">Virtual hr</th><th className="num">Hosp hr</th>
-              <th className="num">Other</th>
-              <th className="num">Pay</th>
+              {sortTh("name", "Employee")}
+              {sortTh("consults", "Cons", true)}{sortTh("followups", "F/U", true)}
+              {sortTh("clinic_pts", "Clinic pts", true)}
+              {sortTh("perdiem", "Per diem", true)}{sortTh("pernote", "Notes", true)}
+              {sortTh("clinic_hr", "Clinic hr", true)}{sortTh("virtual_hr", "Virtual hr", true)}{sortTh("hosp_hr", "Hosp hr", true)}
+              {sortTh("other", "Other", true)}
+              {sortTh("pay", "Pay", true)}
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
+            {sortedRows.map(r => (
               <tr key={r.emp.id}>
                 <td>{r.emp.name}</td>
                 <td className="num">{r.counts.consults||""}</td>
