@@ -357,6 +357,25 @@ async function loadAllEntries() {
   } catch (e) { console.error("all-entries read failed", e); return []; }
 }
 
+/* ---------- public roster of valid usernames (collection "public", doc "usernames") ----------
+   Publicly readable (no names/rates — just the list of active usernames) so the login screen
+   can refuse anyone who isn't a current employee BEFORE any account is created. Owner-write only. */
+async function loadPublicUsernames() {
+  try {
+    const ref = window._fs.doc(window._db, "public", "usernames");
+    const snap = await window._fs.getDoc(ref);
+    if (snap.exists() && snap.data() && Array.isArray(snap.data().value)) return snap.data().value;
+    return null;
+  } catch (e) { return null; }   // missing/denied → fail open (don't lock everyone out before it's seeded)
+}
+async function savePublicUsernames(list) {
+  try {
+    const ref = window._fs.doc(window._db, "public", "usernames");
+    await window._fs.setDoc(ref, { value: list });
+    return true;
+  } catch (e) { console.error("usernames write failed", e); return false; }
+}
+
 /* ---------- app ---------- */
 function App() {
   const [loaded, setLoaded] = useState(false);
@@ -407,7 +426,12 @@ function App() {
     return () => window.removeEventListener("focus", onFocus);
   }, [refresh]);
 
-  const persistEmployees = useCallback(async (next) => { setEmployees(next); await sSet("employees", next); }, []);
+  const persistEmployees = useCallback(async (next) => {
+    setEmployees(next);
+    await sSet("employees", next);
+    // keep the public username allow-list in sync so removed staff can't sign in
+    await savePublicUsernames(next.map(e => String(e.username||"").trim().toLowerCase()).filter(Boolean));
+  }, []);
   const toggleLock = useCallback(async (periodIndex) => {
     const latest = await sGet("manualLocks", []);
     const set = new Set(Array.isArray(latest) ? latest : []);
@@ -506,9 +530,17 @@ function NPLogin({ showToast }) {
   const checkUser = async (e) => {
     if (e) e.preventDefault();
     setErr("");
-    if (!String(username||"").trim()) { setErr("Enter your username."); return; }
+    const u = String(username||"").trim().toLowerCase();
+    if (!u) { setErr("Enter your username."); return; }
     setBusy(true);
     try {
+      // hard lockout: only current employees (on the public allow-list) may sign in or set a password
+      const roster = await loadPublicUsernames();
+      if (Array.isArray(roster) && !roster.includes(u)) {
+        setErr("That username isn't set up. Ask the admin to add you.");
+        setBusy(false);
+        return;
+      }
       const methods = await window._authfns.fetchSignInMethodsForEmail(window._auth, email);
       setStage(methods && methods.length ? "signin" : "create");
     } catch (ex) { setStage("signin"); }
@@ -855,17 +887,20 @@ function payForEntry(emp, entry) {
 
 function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
   const periods = periodList(10, 2);                 // selectable window
-  const [mode, setMode] = useState("period");        // "period" | "custom"
+  const [mode, setMode] = useState("period");        // "period" | "day" | "custom"
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [dayDate, setDayDate] = useState(todayISO());
+  const [calY, setCalY] = useState(parseDate(todayISO()).getFullYear());
+  const [calM, setCalM] = useState(parseDate(todayISO()).getMonth());   // 0-11
 
   const selPeriod = periodByIndex(periodIdx);
   const locked = isPeriodLockedCombined(periodIdx, manualLocks);
 
   // effective date window
-  const winFrom = mode === "period" ? selPeriod.start : from;
-  const winTo   = mode === "period" ? selPeriod.end   : to;
+  const winFrom = mode === "period" ? selPeriod.start : mode === "day" ? dayDate : from;
+  const winTo   = mode === "period" ? selPeriod.end   : mode === "day" ? dayDate : to;
 
   const filtered = entries.filter(e => {
     if (winFrom && e.date < winFrom) return false;
@@ -893,6 +928,17 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
   const totalConsults = rows.reduce((s,r)=>s+r.counts.consults,0);
   const totalFollow = rows.reduce((s,r)=>s+r.counts.followups,0);
   const totalOther = rows.reduce((s,r)=>s+r.otherAmt,0);
+
+  // ----- day-view month calendar -----
+  const empById = (id) => employees.find(x=>x.id===id);
+  const dayTotal = (iso) => entries.filter(e=>e.date===iso).reduce((s,e)=> s + payForEntry(empById(e.empId), e), 0);
+  const calFirst = new Date(calY, calM, 1);
+  const calCells = [];
+  for (let i=0; i<calFirst.getDay(); i++) calCells.push(null);            // leading blanks
+  for (let d=1; d<=new Date(calY, calM+1, 0).getDate(); d++) calCells.push(d);
+  const calLabel = calFirst.toLocaleDateString(undefined, {month:"long", year:"numeric"});
+  const prevMonth = () => (calM<=0 ? (setCalM(11), setCalY(calY-1)) : setCalM(calM-1));
+  const nextMonth = () => (calM>=11 ? (setCalM(0), setCalY(calY+1)) : setCalM(calM+1));
 
   // late entries: entries inside this window that were created after the period locked
   const lateEntries = mode === "period"
@@ -929,11 +975,12 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
   return (
     <div className="card">
       <h2>Roll-up</h2>
-      <p className="hint">Pick a pay period to see its totals and export ADP paydata. Periods run Sunday–Saturday (14 days), paid the Friday after close.</p>
+      <p className="hint">Review by pay period, a single day, or a custom range. Pay periods run Sunday–Saturday (14 days), paid the Friday after close.</p>
 
       {/* mode toggle */}
       <div className="tabs" style={{marginBottom:18}}>
         <button className={"tab"+(mode==="period"?" active":"")} onClick={()=>setMode("period")}>Pay period</button>
+        <button className={"tab"+(mode==="day"?" active":"")} onClick={()=>setMode("day")}>Day</button>
         <button className={"tab"+(mode==="custom"?" active":"")} onClick={()=>setMode("custom")}>Custom range</button>
       </div>
 
@@ -976,6 +1023,35 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
         <div className="row" style={{marginBottom:18}}>
           <div><label>From date</label><input type="date" value={from} onChange={e=>setFrom(e.target.value)} /></div>
           <div><label>To date</label><input type="date" value={to} onChange={e=>setTo(e.target.value)} /></div>
+        </div>
+      )}
+
+      {mode === "day" && (
+        <div style={{marginBottom:18}}>
+          <div className="period-nav">
+            <div style={{display:"flex", alignItems:"center", gap:10}}>
+              <button onClick={prevMonth} aria-label="Previous month">‹</button>
+              <div className="pn-label">{calLabel}</div>
+              <button onClick={nextMonth} aria-label="Next month">›</button>
+            </div>
+            <div className="period-total">Showing <span className="pay" style={{marginLeft:6}}>{fmtShortYr(dayDate)}</span></div>
+          </div>
+          <p className="hint" style={{marginTop:0, marginBottom:10}}>Tap a date to see that day's per-NP breakdown below. Each cell shows the total logged that day.</p>
+          <div className="week-grid">
+            {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => <div className="dow" key={"cd"+d}>{d}</div>)}
+            {calCells.map((d, i) => {
+              if (d === null) return <div key={"blank"+i} />;
+              const iso = fmtISO(new Date(calY, calM, d));
+              const tot = dayTotal(iso);
+              const cls = "day-cell" + (iso===dayDate ? " selected" : "") + (tot>0 ? " logged" : "") + (iso===todayISO() ? " today" : "");
+              return (
+                <div className={cls} key={iso} onClick={()=>setDayDate(iso)}>
+                  <div className="dnum">{d}</div>
+                  {tot>0 ? <div className="damt">{money(tot)}</div> : <div className="dempty">—</div>}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
