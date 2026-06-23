@@ -1473,6 +1473,12 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map(e => e.id===id ? {...e, name: val} : e));
     markDirty();
   };
+  const setRole = (id, val) => {
+    setDraft(draft.map(e => e.id===id ? {...e, role: val} : e));
+    markDirty();
+  };
+  // roles are free-form and shared: the option list is just whatever's already in use
+  const roleOptions = [...new Set(draft.map(e => String(e.role||"").trim()).filter(Boolean))].sort();
   const setUsername = (id, val) => {
     setDraft(draft.map(e => e.id===id ? {...e, username: val} : e));
     markDirty();
@@ -1525,6 +1531,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       if (emp.managedBy) bits.push("manager-entered");
     }
     if (Number(emp.annualSalary) > 0) bits.push("$" + Math.round(Number(emp.annualSalary)/1000) + "k");
+    if (emp.role && String(emp.role).trim()) bits.unshift(String(emp.role).trim());
     const noLogin = emp.salaryOnly;
     return { user: noLogin ? "no login" : (u ? "@"+u : "needs username"), right: bits.length ? bits.join(" · ") : "no pay set", warn: !noLogin && !u };
   };
@@ -1543,6 +1550,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       const rates = {};
       for (const t of VARIABLE) { const v = e.rates?.[t.key]; if (v !== "" && v != null && !isNaN(Number(v)) && Number(v) > 0) rates[t.key] = Number(v); }
       const out = { ...e, name: e.name.trim(), username: normU(e.username), email: String(e.email||"").trim().toLowerCase(), rates, fixedEligible: !!e.fixedEligible };
+      if (e.role && String(e.role).trim()) out.role = String(e.role).trim(); else delete out.role;
       const annual = Number(e.annualSalary);
       if (annual > 0) salariesMap[e.id] = Math.round(annual);   // → owner-only salaries doc
       delete out.annualSalary;                                  // never store the amount in the employees record
@@ -1593,6 +1601,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
         </div>
       )}
 
+      <datalist id="hrg-role-options">{roleOptions.map(r => <option key={r} value={r} />)}</datalist>
       <div ref={listRef}>
       {draft.map(emp => {
         const open = openIds.has(emp.id);
@@ -1614,6 +1623,13 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                 <label>Name</label>
                 <input type="text" value={emp.name} onChange={e=>setName(emp.id, e.target.value)}
                   style={{maxWidth:260, fontWeight:600}} />
+              </div>
+              <div style={{marginBottom:14}}>
+                <label>Role</label>
+                <input type="text" list="hrg-role-options" value={emp.role ?? ""}
+                  placeholder="e.g. NP, Scribe, MA" autoComplete="off"
+                  onChange={e=>setRole(emp.id, e.target.value)} style={{maxWidth:220}} />
+                <div className="fixed-note" style={{marginTop:4}}>Type a new role and it becomes a pick-list option for everyone.</div>
               </div>
               <div style={{marginBottom:14}}>
                 <label>Annual salary (W2 base — shown as biweekly in the roll-up)</label>
