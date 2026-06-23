@@ -693,12 +693,16 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
     return r != null && Number(r) > 0;
   }) : [];
 
-  const setCount = (key, raw) => {
-    let v = Number(raw);
-    if (isNaN(v)) v = 0;
-    v = Math.max(0, qtyRound(key, v));
-    setCounts(c => ({...c, [key]: v}));
+  // typing: keep the raw text so the field can be emptied and hold decimals (e.g. "7.5") while editing
+  const typeCount = (key, raw) => {
+    if (raw !== "" && !/^\d*\.?\d*$/.test(raw)) return;   // digits + at most one decimal point
+    setCounts(c => ({...c, [key]: raw}));
   };
+  // − / + buttons (and a clamp): always step by a whole 1, never below 0
+  const bump = (key, delta) => setCounts(c => {
+    const n = Math.max(0, qtyRound(key, Number(c[key]||0) + delta));
+    return {...c, [key]: n};
+  });
 
   const liveTotal = (emp ? visibleTypes.reduce((sum,t) => {
     const qty = Number(counts[t.key]||0);
@@ -721,7 +725,9 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
     if (!hasCounts && !other && existing.length === 0) { showToast("Enter at least one count or an Other amount"); return; }
     // preserve the existing row's id when editing an already-logged day
     const id = (existing[0] && existing[0].id) || ("e_"+Date.now()+"_"+Math.random().toString(36).slice(2,7));
-    const entry = { id, empId: emp.id, username: normU(emp.username), date, counts: {...counts} };
+    const cleanCounts = {};
+    Object.keys(counts).forEach(k => { const n = qtyRound(k, Number(counts[k]||0)); if (n > 0) cleanCounts[k] = n; });
+    const entry = { id, empId: emp.id, username: normU(emp.username), date, counts: cleanCounts };
     if (other) entry.other = other;
     const kept = await upsertEntry(entry);
     showToast(kept ? ("Saved · " + money(liveTotal) + " · " + fmtShortYr(date)) : ("Cleared · " + fmtShortYr(date)));
@@ -782,8 +788,6 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
             {visibleTypes.map(t => {
               const rate = isFixed(t.key) ? t.rate : Number(emp.rates?.[t.key]||0);
               const dec = isDecimal(t.key);
-              const step = dec ? 0.25 : 1;
-              const cur = Number(counts[t.key]||0);
               return (
                 <div className="counter" key={t.key}>
                   <div>
@@ -791,10 +795,12 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
                     <div className="crate">{money(rate)} / {t.unit}</div>
                   </div>
                   <div className="stepper">
-                    <button onClick={()=>setCount(t.key, cur - step)}>−</button>
-                    <input type="number" value={cur} min="0" step={dec ? "0.25" : "1"}
-                      onChange={e=>setCount(t.key, e.target.value)} />
-                    <button onClick={()=>setCount(t.key, cur + step)}>+</button>
+                    <button onClick={()=>bump(t.key, -1)}>−</button>
+                    <input type="text" inputMode={dec ? "decimal" : "numeric"}
+                      value={counts[t.key] ? counts[t.key] : ""} placeholder="0"
+                      onChange={e=>typeCount(t.key, e.target.value)}
+                      onKeyDown={e=>{ if(e.key==="ArrowUp"){e.preventDefault();bump(t.key,1);} else if(e.key==="ArrowDown"){e.preventDefault();bump(t.key,-1);} }} />
+                    <button onClick={()=>bump(t.key, 1)}>+</button>
                   </div>
                 </div>
               );
