@@ -488,7 +488,7 @@ function LoginScreen({ showToast }) {
       <div style={{height:14}} />
       <button className="btn btn-ghost" style={{width:"100%", fontSize:13}}
         onClick={()=>setMode(mode==="np"?"owner":"np")}>
-        {mode==="np" ? "Owner sign in" : "Back to staff sign in"}
+        {mode==="np" ? "Admin sign in" : "Back to staff sign in"}
       </button>
     </div>
   );
@@ -590,13 +590,13 @@ function OwnerLogin({ showToast }) {
     setErr(""); setBusy(true);
     try {
       const cred = await window._authfns.signInWithEmailAndPassword(window._auth, email.trim(), pw);
-      if (!isOwnerUser(cred.user)) { await window._authfns.signOut(window._auth); setErr("That account isn't an owner."); }
+      if (!isOwnerUser(cred.user)) { await window._authfns.signOut(window._auth); setErr("That account isn't an admin."); }
     } catch (ex) { setErr("Wrong email or password."); }
     finally { setBusy(false); }
   };
   return (
     <form onSubmit={submit}>
-      <h2>Owner sign in</h2>
+      <h2>Admin sign in</h2>
       <p className="hint">For pay rates and the full roll-up. Your browser can save this.</p>
       <label>Email</label>
       <input type="email" autoComplete="username" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" autoFocus />
