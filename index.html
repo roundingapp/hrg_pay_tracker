@@ -568,7 +568,7 @@ function NPLogin({ showToast }) {
   if (stage === "user") {
     return (
       <form onSubmit={checkUser}>
-        <h2>Staff sign in</h2>
+        <h2>Staff Login</h2>
         <p className="hint">Enter your username. First time? You'll set a password next.</p>
         <label>Username</label>
         <input type="text" autoComplete="username" value={username} onChange={e=>setUsername(e.target.value)} placeholder="your username" autoFocus />
