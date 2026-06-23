@@ -163,6 +163,8 @@
   .day-cell.locked .dnum { color:var(--amber); }
   .day-cell.selected { border-color:var(--accent); background:var(--accent-soft); box-shadow:0 0 0 2px var(--accent-soft); }
   @media (max-width:600px){ .day-cell{ min-height:52px; padding:6px 2px; gap:2px; } .day-cell .dnum{font-size:13px;} .day-cell .damt,.day-cell .dempty{font-size:11px;} .week-grid{gap:4px;} }
+  .other-box { border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; background:#fcfbf8; }
+  .other-fields { display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; }
 </style>
 </head>
 <body>
@@ -211,6 +213,7 @@ const FIXED = [
 // per-user variable pay types. rate is set per employee in owner panel.
 // decimal:true => accept fractional quantities (e.g. 7.5 hrs).
 const VARIABLE = [
+  { key: "clinic_pts", label: "Clinic Patients",    unit: "patient", decimal: false },
   { key: "perdiem",    label: "Per diem",           unit: "days",  decimal: false },
   { key: "pernote",    label: "Per note",           unit: "notes", decimal: false },
   { key: "clinic_hr",  label: "Clinic hourly",      unit: "hrs",   decimal: true },
@@ -369,7 +372,9 @@ function App() {
   const upsertEntry = useCallback(async (entry) => {
     const latest = await sGet("entries", []);
     const rest = (latest || []).filter(e => !(e.empId === entry.empId && e.date === entry.date));
-    const hasAny = entry.counts && Object.values(entry.counts).some(v => Number(v) > 0);
+    const hasCounts = entry.counts && Object.values(entry.counts).some(v => Number(v) > 0);
+    const hasOther = entry.other && Number(entry.other.amount) > 0;
+    const hasAny = hasCounts || hasOther;
     const next = hasAny ? [...rest, entry] : rest;
     setEntries(next);
     await sSet("entries", next);
@@ -439,6 +444,9 @@ function EntryView({ employees, entries, upsertEntry, manualLocks, showToast }) 
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
+  const [otherOn, setOtherOn] = useState(false);     // "Other" one-off pay for the selected day
+  const [otherAmt, setOtherAmt] = useState("");
+  const [otherNote, setOtherNote] = useState("");
 
   // resolve employee from typed username (normalized). null until a real match.
   const typed = normU(uname);
@@ -457,7 +465,7 @@ function EntryView({ employees, entries, upsertEntry, manualLocks, showToast }) 
 
   // this employee's saved rows for an ISO day (legacy data may hold >1), and their dollar value
   const dayEntries = (iso) => (emp ? entries.filter(e => e.empId === emp.id && e.date === iso) : []);
-  const dayDollars = (iso) => dayEntries(iso).reduce((s,e) => s + payForCounts(e.counts, emp), 0);
+  const dayDollars = (iso) => dayEntries(iso).reduce((s,e) => s + payForEntry(emp, e), 0);
   const periodDollars = periodDays.reduce((s,iso) => s + dayDollars(iso), 0);
 
   // when navigating to another period, pull the selected day into that period
@@ -469,11 +477,15 @@ function EntryView({ employees, entries, upsertEntry, manualLocks, showToast }) 
   // day or the verified employee changes — so tapping a day shows what's there to edit
   useEffect(() => {
     if (!emp) return;
+    const es = dayEntries(date);
     const merged = {};
-    dayEntries(date).forEach(e => Object.entries(e.counts || {}).forEach(([k,v]) => {
+    es.forEach(e => Object.entries(e.counts || {}).forEach(([k,v]) => {
       merged[k] = (merged[k] || 0) + Number(v || 0);
     }));
     setCounts(merged);
+    const withOther = es.find(e => e.other && Number(e.other.amount) > 0);
+    if (withOther) { setOtherOn(true); setOtherAmt(String(withOther.other.amount)); setOtherNote(withOther.other.note || ""); }
+    else { setOtherOn(false); setOtherAmt(""); setOtherNote(""); }
   }, [date, emp && emp.id]);
 
   const visibleTypes = emp ? ALL_TYPES.filter(t => {
@@ -489,20 +501,29 @@ function EntryView({ employees, entries, upsertEntry, manualLocks, showToast }) 
     setCounts(c => ({...c, [key]: v}));
   };
 
-  const liveTotal = emp ? visibleTypes.reduce((sum,t) => {
+  const liveTotal = (emp ? visibleTypes.reduce((sum,t) => {
     const qty = Number(counts[t.key]||0);
     const rate = isFixed(t.key) ? t.rate : Number(emp.rates?.[t.key]||0);
     return sum + qty*rate;
-  }, 0) : 0;
+  }, 0) : 0) + (otherOn && Number(otherAmt) > 0 ? Number(otherAmt) : 0);
 
   const submit = async () => {
     if (!emp) { showToast("Enter a valid username first"); return; }
-    const hasAny = Object.values(counts).some(v => Number(v) > 0);
+    // an "Other" line requires both a positive amount and an explanation
+    let other = null;
+    if (otherOn) {
+      const amt = Number(otherAmt);
+      if (!(amt > 0)) { showToast("Enter a dollar amount for the Other line"); return; }
+      if (!otherNote.trim()) { showToast("Add a comment explaining the Other amount"); return; }
+      other = { amount: Math.round(amt*100)/100, note: otherNote.trim() };
+    }
+    const hasCounts = Object.values(counts).some(v => Number(v) > 0);
     const existing = dayEntries(date);
-    if (!hasAny && existing.length === 0) { showToast("Enter at least one count"); return; }
+    if (!hasCounts && !other && existing.length === 0) { showToast("Enter at least one count or an Other amount"); return; }
     // preserve the existing row's id when editing an already-logged day
     const id = (existing[0] && existing[0].id) || ("e_"+Date.now()+"_"+Math.random().toString(36).slice(2,7));
     const entry = { id, empId: emp.id, username: typed, date, counts: {...counts} };
+    if (other) entry.other = other;
     const kept = await upsertEntry(entry);
     showToast(kept ? ("Saved · " + money(liveTotal) + " · " + fmtShortYr(date)) : ("Cleared · " + fmtShortYr(date)));
   };
@@ -579,11 +600,6 @@ function EntryView({ employees, entries, upsertEntry, manualLocks, showToast }) 
         </>
       )}
 
-      {emp && visibleTypes.length === 0 && (
-        <div className="empty" style={{marginTop:20}}>
-          No pay types are set up for {emp.name} yet. The owner needs to set rates or enable consult/follow-up eligibility in the rates panel.
-        </div>
-      )}
       {emp && visibleTypes.length > 0 && (
         <>
           <div style={{height:18}} />
@@ -612,12 +628,54 @@ function EntryView({ employees, entries, upsertEntry, manualLocks, showToast }) 
               );
             })}
           </div>
+        </>
+      )}
+
+      {emp && visibleTypes.length === 0 && (
+        <div className="fixed-note" style={{marginTop:18}}>
+          No counted pay types are set up for {emp.name} yet — you can still log an Other amount below, or ask the owner to set your rates.
+        </div>
+      )}
+
+      {emp && (
+        <>
+          <div style={{height:18}} />
+          <div className="other-box">
+            <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
+              <input type="checkbox" style={{width:"auto", margin:0}}
+                checked={otherOn} onChange={e=>setOtherOn(e.target.checked)} />
+              <span style={{color:"var(--ink)", fontWeight:500}}>Other — a one-off amount not covered above</span>
+            </label>
+            {otherOn && (
+              <>
+                <div className="other-fields">
+                  <div style={{maxWidth:200}}>
+                    <label>Amount ($)</label>
+                    <input type="number" min="0" step="0.01" placeholder="0.00"
+                      value={otherAmt} onChange={e=>setOtherAmt(e.target.value)}
+                      style={ !(Number(otherAmt) > 0) ? {borderColor:"var(--danger)"} : null } />
+                  </div>
+                  <div style={{flex:"1 1 220px", minWidth:0}}>
+                    <label>Explanation (required)</label>
+                    <input type="text" placeholder="What is this for?"
+                      value={otherNote} onChange={e=>setOtherNote(e.target.value)}
+                      style={ !otherNote.trim() ? {borderColor:"var(--danger)"} : null } />
+                  </div>
+                </div>
+                {(!(Number(otherAmt) > 0) || !otherNote.trim()) && (
+                  <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>
+                    An Other line needs both a dollar amount and an explanation before it can be saved.
+                  </div>
+                )}
+              </>
+            )}
+          </div>
 
           <div className="savebar">
             <div style={{alignSelf:"center", marginRight:"auto", fontSize:14, color:"var(--muted)"}}>
               This entry: <span className="pay">{money(liveTotal)}</span>
             </div>
-            <button className="btn btn-ghost" onClick={()=>setCounts({})}>Clear</button>
+            <button className="btn btn-ghost" onClick={()=>{ setCounts({}); setOtherOn(false); setOtherAmt(""); setOtherNote(""); }}>Clear</button>
             <button className="btn btn-primary" onClick={submit}>Save entry</button>
           </div>
         </>
@@ -652,6 +710,8 @@ function payForEntry(emp, entry) {
     const rate = isFixed(t.key) ? t.rate : Number(emp?.rates?.[t.key]||0);
     total += qty*rate;
   }
+  const ov = Number(entry.other?.amount);
+  if (ov > 0) total += ov;
   return total;
 }
 
@@ -700,7 +760,7 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
     : [];
 
   const exportADP = () => {
-    const header = ["Co Code","Batch ID","File #","Employee Name","Other Earnings Code","Other Earnings Amount","Consults","Follow-ups","Per Diem","Per Note","Clinic Hrs","Virtual Hrs","In-Hospital Hrs","Period Start","Period End","Payday"];
+    const header = ["Co Code","Batch ID","File #","Employee Name","Other Earnings Code","Other Earnings Amount","Consults","Follow-ups","Clinic Patients","Per Diem","Per Note","Clinic Hrs","Virtual Hrs","In-Hospital Hrs","Period Start","Period End","Payday"];
     const lines = [header.join(",")];
     const payday = mode === "period" ? selPeriod.payday : "";
     rows.filter(r=>r.pay>0).forEach((r) => {
@@ -708,7 +768,7 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
       const cell = v => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
       lines.push([
         "", "", "", r.emp.name, "Other", (Math.round(r.pay*100)/100).toFixed(2),
-        c.consults, c.followups, c.perdiem, c.pernote, c.clinic_hr, c.virtual_hr, c.hosp_hr,
+        c.consults, c.followups, c.clinic_pts, c.perdiem, c.pernote, c.clinic_hr, c.virtual_hr, c.hosp_hr,
         winFrom||"", winTo||"", payday
       ].map(cell).join(","));
     });
@@ -800,6 +860,7 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
             <tr>
               <th>Employee</th>
               <th className="num">Cons</th><th className="num">F/U</th>
+              <th className="num">Clinic pts</th>
               <th className="num">Per diem</th><th className="num">Notes</th>
               <th className="num">Clinic hr</th><th className="num">Virtual hr</th><th className="num">Hosp hr</th>
               <th className="num">Pay</th>
@@ -811,6 +872,7 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
                 <td>{r.emp.name}</td>
                 <td className="num">{r.counts.consults||""}</td>
                 <td className="num">{r.counts.followups||""}</td>
+                <td className="num">{r.counts.clinic_pts||""}</td>
                 <td className="num">{r.counts.perdiem||""}</td>
                 <td className="num">{r.counts.pernote||""}</td>
                 <td className="num">{r.counts.clinic_hr||""}</td>
@@ -823,6 +885,7 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
               <td>Total</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.consults,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.followups,0)}</td>
+              <td className="num">{rows.reduce((s,r)=>s+r.counts.clinic_pts,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.perdiem,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.pernote,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.clinic_hr,0)}</td>
@@ -1013,9 +1076,11 @@ function AllEntries({ employees, entries, persistEntries, showToast }) {
   };
 
   const summarize = (entry) => {
-    const emp = employees.find(e=>e.id===entry.empId);
-    return ALL_TYPES.filter(t => Number(entry.counts?.[t.key]||0) > 0)
-      .map(t => `${entry.counts[t.key]} ${t.label.toLowerCase()}`).join(", ") || "—";
+    const parts = ALL_TYPES.filter(t => Number(entry.counts?.[t.key]||0) > 0)
+      .map(t => `${entry.counts[t.key]} ${t.label.toLowerCase()}`);
+    if (entry.other && Number(entry.other.amount) > 0)
+      parts.push(`Other ${money(entry.other.amount)}${entry.other.note ? " ("+entry.other.note+")" : ""}`);
+    return parts.join(", ") || "—";
   };
 
   if (!entries.length) return <div className="card"><div className="empty">No entries logged yet.</div></div>;
