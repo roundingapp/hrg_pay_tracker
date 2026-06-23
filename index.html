@@ -398,19 +398,22 @@ function App() {
         <span className="pill">{employees.length} employee{employees.length===1?"":"s"}</span>
       </div>
 
-      <div className="tabs">
-        <button className={"tab"+(tab==="entry"?" active":"")} onClick={()=>setTab("entry")}>Log entries</button>
-        <button className={"tab"+(tab==="owner"?" active":"")} onClick={()=>setTab("owner")}>Owner roll-up</button>
-      </div>
+      {/* Owner tabs are hidden until the owner passcode is entered in the username field on the Log-entries screen */}
+      {ownerUnlocked && (
+        <div className="tabs">
+          <button className={"tab"+(tab==="entry"?" active":"")} onClick={()=>setTab("entry")}>Log entries</button>
+          <button className={"tab"+(tab==="owner"?" active":"")} onClick={()=>setTab("owner")}>Owner roll-up</button>
+          <button className="tab" onClick={()=>{ setOwnerUnlocked(false); setTab("entry"); showToast("Owner view locked"); }}>Lock 🔒</button>
+        </div>
+      )}
 
       {tab==="entry" && (
-        <EntryView employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast} />
+        <EntryView employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast}
+          onOwnerUnlock={()=>{ setOwnerUnlocked(true); setTab("owner"); showToast("Owner roll-up unlocked"); }} />
       )}
-      {tab==="owner" && (
-        ownerUnlocked
-          ? <OwnerView employees={employees} entries={entries} manualLocks={manualLocks} toggleLock={toggleLock}
-              persistEmployees={persistEmployees} persistEntries={persistEntries} showToast={showToast} />
-          : <LockScreen onUnlock={()=>setOwnerUnlocked(true)} showToast={showToast} />
+      {tab==="owner" && ownerUnlocked && (
+        <OwnerView employees={employees} entries={entries} manualLocks={manualLocks} toggleLock={toggleLock}
+          persistEmployees={persistEmployees} persistEntries={persistEntries} showToast={showToast} />
       )}
 
       <div className={"toast"+(toast?" show":"")}>{toast}</div>
@@ -439,7 +442,7 @@ function LockScreen({ onUnlock, showToast }) {
 }
 
 /* ---------- entry view ---------- */
-function EntryView({ employees, entries, upsertEntry, manualLocks, showToast }) {
+function EntryView({ employees, entries, upsertEntry, manualLocks, showToast, onOwnerUnlock }) {
   const [uname, setUname] = useState("");
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
@@ -487,6 +490,11 @@ function EntryView({ employees, entries, upsertEntry, manualLocks, showToast }) 
     if (withOther) { setOtherOn(true); setOtherAmt(String(withOther.other.amount)); setOtherNote(withOther.other.note || ""); }
     else { setOtherOn(false); setOtherAmt(""); setOtherNote(""); }
   }, [date, emp && emp.id]);
+
+  // typing the owner passcode into the username field unlocks the (otherwise hidden) owner roll-up
+  useEffect(() => {
+    if (normU(uname) === OWNER_PASS) { setUname(""); setCounts({}); onOwnerUnlock && onOwnerUnlock(); }
+  }, [uname]);
 
   const visibleTypes = emp ? ALL_TYPES.filter(t => {
     if (isFixed(t.key)) return !!emp.fixedEligible;
@@ -739,17 +747,22 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
     const empEntries = filtered.filter(e => e.empId === emp.id);
     const counts = {};
     let pay = 0;
+    let otherAmt = 0;
+    const otherNotes = [];
     for (const t of ALL_TYPES) counts[t.key] = 0;
     for (const e of empEntries) {
       for (const t of ALL_TYPES) counts[t.key] += Number(e.counts?.[t.key]||0);
       pay += payForEntry(emp, e);
+      const ov = Number(e.other?.amount);
+      if (ov > 0) { otherAmt += ov; otherNotes.push({ date: e.date, amount: ov, note: (e.other.note || "").trim() }); }
     }
-    return { emp, counts, pay, n: empEntries.length };
+    return { emp, counts, pay, n: empEntries.length, otherAmt, otherNotes };
   });
 
   const grand = rows.reduce((s,r)=>s+r.pay,0);
   const totalConsults = rows.reduce((s,r)=>s+r.counts.consults,0);
   const totalFollow = rows.reduce((s,r)=>s+r.counts.followups,0);
+  const totalOther = rows.reduce((s,r)=>s+r.otherAmt,0);
 
   // late entries: entries inside this window that were created after the period locked
   const lateEntries = mode === "period"
@@ -863,6 +876,7 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
               <th className="num">Clinic pts</th>
               <th className="num">Per diem</th><th className="num">Notes</th>
               <th className="num">Clinic hr</th><th className="num">Virtual hr</th><th className="num">Hosp hr</th>
+              <th className="num">Other</th>
               <th className="num">Pay</th>
             </tr>
           </thead>
@@ -878,6 +892,7 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
                 <td className="num">{r.counts.clinic_hr||""}</td>
                 <td className="num">{r.counts.virtual_hr||""}</td>
                 <td className="num">{r.counts.hosp_hr||""}</td>
+                <td className="num">{r.otherAmt ? money(r.otherAmt) : ""}</td>
                 <td className="num pay">{money(r.pay)}</td>
               </tr>
             ))}
@@ -891,11 +906,33 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
               <td className="num">{rows.reduce((s,r)=>s+r.counts.clinic_hr,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.virtual_hr,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.hosp_hr,0)}</td>
+              <td className="num">{totalOther ? money(totalOther) : ""}</td>
               <td className="num pay">{money(grand)}</td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      {rows.some(r => r.otherNotes.length > 0) && (
+        <div className="scroll-x" style={{marginTop:18}}>
+          <label style={{marginBottom:8}}>Other adjustments — explanations</label>
+          <table>
+            <thead>
+              <tr><th>Date</th><th>Employee</th><th className="num">Amount</th><th>Explanation</th></tr>
+            </thead>
+            <tbody>
+              {rows.flatMap(r => r.otherNotes.map((o, i) => (
+                <tr key={r.emp.id+"-o"+i}>
+                  <td style={{whiteSpace:"nowrap"}}>{fmtShortYr(o.date)}</td>
+                  <td style={{whiteSpace:"nowrap"}}>{r.emp.name}</td>
+                  <td className="num pay">{money(o.amount)}</td>
+                  <td>{o.note || "—"}</td>
+                </tr>
+              )))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="actions" style={{marginTop:18}}>
         <button className="btn btn-primary" onClick={exportADP}>Export ADP CSV</button>
