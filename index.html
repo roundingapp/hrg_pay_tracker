@@ -122,6 +122,16 @@
   .rate-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
   .rate-field label { font-size: 12px; }
   .rate-field .fixed-note { font-size: 11px; color: var(--faint); margin-top: 4px; }
+  .emp-rate-block .emp-head { display:flex; align-items:center; gap:10px; cursor:pointer; flex:1 1 auto; min-width:0; }
+  .emp-rate-block .emp-chev { font-size:11px; color:var(--muted); flex:none; width:12px; text-align:center; }
+  .emp-rate-block .emp-name-txt { font-weight:600; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:none; }
+  .emp-rate-block .emp-meta { font-size:12px; color:var(--faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .emp-rate-block .emp-meta.warn { color:var(--danger); }
+  .emp-rate-block.collapsed { padding:12px 16px; }
+  .emp-rate-block.collapsed .ename { margin-bottom:0; }
+  .rates-toolbar { display:flex; justify-content:flex-end; gap:4px; margin-bottom:10px; }
+  .rates-toolbar button { background:none; border:none; color:var(--accent-ink); font-size:13px; cursor:pointer; padding:4px 6px; border-radius:6px; }
+  .rates-toolbar button:hover { background:var(--accent-soft); }
   .pill { font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: 20px; background: #efede6; color: var(--muted); }
   .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
   .add-emp { display: flex; gap: 10px; margin-bottom: 18px; }
@@ -836,6 +846,7 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
 function Rates({ employees, persistEmployees, showToast }) {
   const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(employees)));
   const [newName, setNewName] = useState("");
+  const [openIds, setOpenIds] = useState(() => new Set());   // expanded employee rows; default collapsed
   const dirtyRef = useRef(false);
 
   useEffect(()=>{ setDraft(JSON.parse(JSON.stringify(employees))); }, [employees]);
@@ -843,8 +854,10 @@ function Rates({ employees, persistEmployees, showToast }) {
   const addEmp = () => {
     const name = newName.trim();
     if (!name) return;
-    const next = [...draft, { id: "emp_"+Date.now()+"_"+Math.random().toString(36).slice(2,6), name, rates: {}, fixedEligible: true }];
+    const id = "emp_"+Date.now()+"_"+Math.random().toString(36).slice(2,6);
+    const next = [...draft, { id, name, rates: {}, fixedEligible: true }];
     setDraft(next); setNewName(""); dirtyRef.current = true;
+    setOpenIds(s => new Set(s).add(id));   // a freshly added employee starts expanded
   };
   const removeEmp = (id) => {
     setDraft(draft.filter(e=>e.id!==id)); dirtyRef.current = true;
@@ -864,6 +877,18 @@ function Rates({ employees, persistEmployees, showToast }) {
   const setFixedElig = (id, val) => {
     setDraft(draft.map(e => e.id===id ? {...e, fixedEligible: val} : e));
     dirtyRef.current = true;
+  };
+  const toggleOpen = (id) => setOpenIds(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const expandAll = () => setOpenIds(new Set(draft.map(e=>e.id)));
+  const collapseAll = () => setOpenIds(new Set());
+  // one-line summary shown when an employee row is collapsed
+  const empMeta = (emp) => {
+    const u = normU(emp.username);
+    const nRates = VARIABLE.filter(t => Number(emp.rates?.[t.key]) > 0).length;
+    const bits = [];
+    if (emp.fixedEligible) bits.push("consults+FU");
+    if (nRates) bits.push(nRates + " rate" + (nRates===1?"":"s"));
+    return { user: u ? "@"+u : "needs username", right: bits.length ? bits.join(" · ") : "no pay set", warn: !u };
   };
   const save = async () => {
     const named = draft.filter(e => e.name.trim());
@@ -902,48 +927,71 @@ function Rates({ employees, persistEmployees, showToast }) {
 
       {draft.length===0 && <div className="empty">No employees yet. Add your first staff member above.</div>}
 
-      {draft.map(emp => (
-        <div className="emp-rate-block" key={emp.id}>
-          <div className="ename">
-            <input type="text" value={emp.name} onChange={e=>setName(emp.id, e.target.value)}
-              style={{maxWidth:260, fontWeight:600}} />
-            <button className="btn btn-danger" onClick={()=>removeEmp(emp.id)}>Remove</button>
-          </div>
-          <div style={{marginBottom:14}}>
-            <label>Username (what they type to log in)</label>
-            <input type="text" value={emp.username ?? ""} autoComplete="off"
-              placeholder="e.g. tiffany"
-              onChange={e=>setUsername(emp.id, e.target.value)}
-              style={{maxWidth:260, ...(emp.username && draft.filter(x=>normU(x.username)===normU(emp.username)).length>1 ? {borderColor:"var(--danger)"} : {})}} />
-            {emp.username && draft.filter(x=>normU(x.username)===normU(emp.username)).length>1 && (
-              <div className="fixed-note" style={{color:"var(--danger)", marginTop:4}}>Duplicate — this username is used by someone else.</div>
-            )}
-          </div>
-          <div style={{marginBottom:14, paddingBottom:14, borderBottom:"1px solid var(--line)"}}>
-            <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
-              <input type="checkbox" style={{width:"auto", margin:0}}
-                checked={!!emp.fixedEligible}
-                onChange={e=>setFixedElig(emp.id, e.target.checked)} />
-              <span style={{color:"var(--ink)", fontWeight:500}}>
-                Eligible for consults ($60) &amp; follow-ups ($30)
-              </span>
-            </label>
-            <div className="fixed-note" style={{marginLeft:28, marginTop:4}}>
-              Leave unchecked for clinic staff — those tiles won't show in their entry screen.
-            </div>
-          </div>
-          <div className="rate-grid">
-            {VARIABLE.map(t => (
-              <div className="rate-field" key={t.key}>
-                <label>{t.label} ($/{t.unit})</label>
-                <input type="number" min="0" step="0.01" placeholder="0"
-                  value={emp.rates?.[t.key] ?? ""}
-                  onChange={e=>setRate(emp.id, t.key, e.target.value)} />
-              </div>
-            ))}
-          </div>
+      {draft.length>1 && (
+        <div className="rates-toolbar">
+          <button onClick={expandAll}>Expand all</button>
+          <button onClick={collapseAll}>Collapse all</button>
         </div>
-      ))}
+      )}
+
+      {draft.map(emp => {
+        const open = openIds.has(emp.id);
+        const meta = empMeta(emp);
+        return (
+        <div className={"emp-rate-block" + (open ? " open" : " collapsed")} key={emp.id}>
+          <div className="ename">
+            <div className="emp-head" onClick={()=>toggleOpen(emp.id)}>
+              <span className="emp-chev">{open ? "▾" : "▸"}</span>
+              <span className="emp-name-txt">{(emp.name && emp.name.trim()) || "Unnamed employee"}</span>
+              {!open && <span className={"emp-meta"+(meta.warn?" warn":"")}>{meta.user} · {meta.right}</span>}
+            </div>
+            {open && <button className="btn btn-danger" onClick={()=>removeEmp(emp.id)}>Remove</button>}
+          </div>
+          {open && (
+            <>
+              <div style={{margin:"12px 0 14px"}}>
+                <label>Name</label>
+                <input type="text" value={emp.name} onChange={e=>setName(emp.id, e.target.value)}
+                  style={{maxWidth:260, fontWeight:600}} />
+              </div>
+              <div style={{marginBottom:14}}>
+                <label>Username (what they type to log in)</label>
+                <input type="text" value={emp.username ?? ""} autoComplete="off"
+                  placeholder="e.g. tiffany"
+                  onChange={e=>setUsername(emp.id, e.target.value)}
+                  style={{maxWidth:260, ...(emp.username && draft.filter(x=>normU(x.username)===normU(emp.username)).length>1 ? {borderColor:"var(--danger)"} : {})}} />
+                {emp.username && draft.filter(x=>normU(x.username)===normU(emp.username)).length>1 && (
+                  <div className="fixed-note" style={{color:"var(--danger)", marginTop:4}}>Duplicate — this username is used by someone else.</div>
+                )}
+              </div>
+              <div style={{marginBottom:14, paddingBottom:14, borderBottom:"1px solid var(--line)"}}>
+                <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
+                  <input type="checkbox" style={{width:"auto", margin:0}}
+                    checked={!!emp.fixedEligible}
+                    onChange={e=>setFixedElig(emp.id, e.target.checked)} />
+                  <span style={{color:"var(--ink)", fontWeight:500}}>
+                    Eligible for consults ($60) &amp; follow-ups ($30)
+                  </span>
+                </label>
+                <div className="fixed-note" style={{marginLeft:28, marginTop:4}}>
+                  Leave unchecked for clinic staff — those tiles won't show in their entry screen.
+                </div>
+              </div>
+              <div className="rate-grid">
+                {VARIABLE.map(t => (
+                  <div className="rate-field" key={t.key}>
+                    <label>{t.label} ($/{t.unit})</label>
+                    <input type="number" min="0" step="0.01" placeholder="0"
+                      value={emp.rates?.[t.key] ?? ""}
+                      onChange={e=>setRate(emp.id, t.key, e.target.value)} />
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        );
+      })}
 
       {draft.length>0 && (
         <div className="actions" style={{justifyContent:"flex-end"}}>
