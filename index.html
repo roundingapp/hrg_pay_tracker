@@ -194,6 +194,66 @@ const normU = s => String(s||"").trim().toLowerCase();
 const money = n => "$" + (Math.round(n * 100) / 100).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const todayISO = () => new Date().toISOString().slice(0,10);
 
+/* ---------- pay period model ----------
+   14-day biweekly. Anchor period: Sun 2026-06-14 .. Sat 2026-06-27, paid Fri 2026-07-03.
+   Each subsequent period starts 14 days later; payday is the Friday 6 days after the period ends.
+   Lock: a period becomes read-only 72 hours before its payday.                                  */
+const PERIOD_ANCHOR_START = "2026-06-14"; // a Sunday
+const PERIOD_LEN_DAYS = 14;
+const PAYDAY_OFFSET_DAYS = 6;   // period end (Sat) + 6 = Friday payday
+const LOCK_LEAD_HOURS = 72;
+
+// parse 'YYYY-MM-DD' as a local date at midnight (avoids UTC shift bugs)
+function parseDate(iso) { const [y,m,d] = iso.split("-").map(Number); return new Date(y, m-1, d); }
+function fmtISO(dt) { return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0"); }
+function addDays(dt, n) { const x = new Date(dt); x.setDate(x.getDate()+n); return x; }
+function fmtShort(iso) { const d = parseDate(iso); return d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); }
+function fmtShortYr(iso) { const d = parseDate(iso); return d.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}); }
+
+// which period index contains a given ISO date (can be negative for dates before the anchor)
+function periodIndexFor(iso) {
+  const anchor = parseDate(PERIOD_ANCHOR_START);
+  const target = parseDate(iso);
+  const diffDays = Math.floor((target - anchor) / 86400000);
+  return Math.floor(diffDays / PERIOD_LEN_DAYS);
+}
+// build a period object from its index
+function periodByIndex(i) {
+  const start = addDays(parseDate(PERIOD_ANCHOR_START), i * PERIOD_LEN_DAYS);
+  const end = addDays(start, PERIOD_LEN_DAYS - 1);          // inclusive Saturday
+  const payday = addDays(end, PAYDAY_OFFSET_DAYS);           // Friday
+  const lockAt = new Date(payday); lockAt.setHours(0,0,0,0); lockAt.setHours(lockAt.getHours() - LOCK_LEAD_HOURS);
+  return {
+    index: i,
+    start: fmtISO(start),
+    end: fmtISO(end),
+    payday: fmtISO(payday),
+    lockAt,                                                   // Date object
+    label: fmtShort(fmtISO(start)) + " – " + fmtShort(fmtISO(end)),
+    paydayLabel: fmtShort(fmtISO(payday)),
+  };
+}
+// is a period locked right now? (auto: 72h before payday)
+function isPeriodLocked(p, now = new Date()) { return now >= p.lockAt; }
+// combined lock: auto-lock OR owner manual lock
+function isPeriodLockedCombined(periodIndex, manualLocks, now = new Date()) {
+  if (Array.isArray(manualLocks) && manualLocks.includes(periodIndex)) return true;
+  return isPeriodLocked(periodByIndex(periodIndex), now);
+}
+// is a given ISO date inside any locked period?
+function dateInLockedPeriod(iso, manualLocks, now = new Date()) {
+  return isPeriodLockedCombined(periodIndexFor(iso), manualLocks, now);
+}
+// the period index for "today"
+function currentPeriodIndex() { return periodIndexFor(todayISO()); }
+// a window of selectable periods around now (past `back`, future `fwd`)
+function periodList(back = 8, fwd = 2) {
+  const c = currentPeriodIndex();
+  const out = [];
+  for (let i = c + fwd; i >= c - back; i--) out.push(periodByIndex(i));
+  return out; // newest first
+}
+
 /* ---------- storage layer (Firebase Firestore) ----------
    Stores two documents in collection "paytracker":
      paytracker/employees  -> { value: [...] }
@@ -222,14 +282,17 @@ function App() {
   const [tab, setTab] = useState("entry");
   const [employees, setEmployees] = useState([]); // {id,name,rates:{}}
   const [entries, setEntries] = useState([]);      // {id,empId,date,counts:{}}
+  const [manualLocks, setManualLocks] = useState([]); // array of period index numbers locked early by owner
   const [toast, setToast] = useState("");
   const [ownerUnlocked, setOwnerUnlocked] = useState(false);
 
   const refresh = useCallback(async () => {
     const emps = await sGet("employees", null);
     const ents = await sGet("entries", []);
+    const locks = await sGet("manualLocks", []);
     setEmployees(emps && emps.length ? emps : []);
     setEntries(ents || []);
+    setManualLocks(Array.isArray(locks) ? locks : []);
   }, []);
 
   useEffect(() => {
@@ -244,6 +307,14 @@ function App() {
 
   const persistEmployees = useCallback(async (next) => { setEmployees(next); await sSet("employees", next); }, []);
   const persistEntries   = useCallback(async (next) => { setEntries(next); await sSet("entries", next); }, []);
+  const toggleLock = useCallback(async (periodIndex) => {
+    const latest = await sGet("manualLocks", []);
+    const set = new Set(Array.isArray(latest) ? latest : []);
+    if (set.has(periodIndex)) set.delete(periodIndex); else set.add(periodIndex);
+    const next = [...set];
+    setManualLocks(next);
+    await sSet("manualLocks", next);
+  }, []);
   // safe append: re-read latest entries first so two devices submitting
   // close together don't overwrite each other (last-write-wins guard)
   const addEntry = useCallback(async (entry) => {
@@ -277,11 +348,11 @@ function App() {
       </div>
 
       {tab==="entry" && (
-        <EntryView employees={employees} entries={entries} addEntry={addEntry} showToast={showToast} />
+        <EntryView employees={employees} entries={entries} addEntry={addEntry} manualLocks={manualLocks} showToast={showToast} />
       )}
       {tab==="owner" && (
         ownerUnlocked
-          ? <OwnerView employees={employees} entries={entries}
+          ? <OwnerView employees={employees} entries={entries} manualLocks={manualLocks} toggleLock={toggleLock}
               persistEmployees={persistEmployees} persistEntries={persistEntries} showToast={showToast} />
           : <LockScreen onUnlock={()=>setOwnerUnlocked(true)} showToast={showToast} />
       )}
@@ -312,7 +383,7 @@ function LockScreen({ onUnlock, showToast }) {
 }
 
 /* ---------- entry view ---------- */
-function EntryView({ employees, entries, addEntry, showToast }) {
+function EntryView({ employees, entries, addEntry, manualLocks, showToast }) {
   const [uname, setUname] = useState("");
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
@@ -322,6 +393,9 @@ function EntryView({ employees, entries, addEntry, showToast }) {
   const matched = typed ? employees.filter(e => normU(e.username) === typed) : [];
   const emp = matched.length === 1 ? matched[0] : null;
   const ambiguous = matched.length > 1; // shouldn't happen if owner-panel enforces uniqueness
+
+  // is the chosen date inside a period that's already locked?
+  const dateLocked = date ? dateInLockedPeriod(date, manualLocks) : false;
 
   const visibleTypes = emp ? ALL_TYPES.filter(t => {
     if (isFixed(t.key)) return !!emp.fixedEligible;
@@ -386,7 +460,13 @@ function EntryView({ employees, entries, addEntry, showToast }) {
         </div>
         <div>
           <label>Date</label>
-          <input type="date" value={date} onChange={e=>setDate(e.target.value)} />
+          <input type="date" value={date} onChange={e=>setDate(e.target.value)}
+            style={ dateLocked ? {borderColor:"var(--amber)"} : null } />
+          {dateLocked && (
+            <div className="fixed-note" style={{color:"var(--amber)", marginTop:6}}>
+              Heads up: this date is in a pay period that's already locked for payroll. You can still save, but the owner will be notified it came in late.
+            </div>
+          )}
         </div>
       </div>
 
@@ -435,7 +515,7 @@ function EntryView({ employees, entries, addEntry, showToast }) {
 }
 
 /* ---------- owner view ---------- */
-function OwnerView({ employees, entries, persistEmployees, persistEntries, showToast }) {
+function OwnerView({ employees, entries, manualLocks, toggleLock, persistEmployees, persistEntries, showToast }) {
   const [sub, setSub] = useState("rollup");
   return (
     <>
@@ -444,7 +524,7 @@ function OwnerView({ employees, entries, persistEmployees, persistEntries, showT
         <button className={"tab"+(sub==="rates"?" active":"")} onClick={()=>setSub("rates")}>Employees &amp; rates</button>
         <button className={"tab"+(sub==="entries"?" active":"")} onClick={()=>setSub("entries")}>All entries</button>
       </div>
-      {sub==="rollup"  && <Rollup employees={employees} entries={entries} />}
+      {sub==="rollup"  && <Rollup employees={employees} entries={entries} manualLocks={manualLocks} toggleLock={toggleLock} showToast={showToast} />}
       {sub==="rates"   && <Rates employees={employees} persistEmployees={persistEmployees} showToast={showToast} />}
       {sub==="entries" && <AllEntries employees={employees} entries={entries} persistEntries={persistEntries} showToast={showToast} />}
     </>
@@ -463,17 +543,26 @@ function payForEntry(emp, entry) {
   return total;
 }
 
-function Rollup({ employees, entries }) {
+function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
+  const periods = periodList(10, 2);                 // selectable window
+  const [mode, setMode] = useState("period");        // "period" | "custom"
+  const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
 
+  const selPeriod = periodByIndex(periodIdx);
+  const locked = isPeriodLockedCombined(periodIdx, manualLocks);
+
+  // effective date window
+  const winFrom = mode === "period" ? selPeriod.start : from;
+  const winTo   = mode === "period" ? selPeriod.end   : to;
+
   const filtered = entries.filter(e => {
-    if (from && e.date < from) return false;
-    if (to && e.date > to) return false;
+    if (winFrom && e.date < winFrom) return false;
+    if (winTo && e.date > winTo) return false;
     return true;
   });
 
-  // aggregate per employee
   const rows = employees.map(emp => {
     const empEntries = filtered.filter(e => e.empId === emp.id);
     const counts = {};
@@ -484,51 +573,113 @@ function Rollup({ employees, entries }) {
       pay += payForEntry(emp, e);
     }
     return { emp, counts, pay, n: empEntries.length };
-  }).filter(r => r.n > 0 || true);
+  });
 
   const grand = rows.reduce((s,r)=>s+r.pay,0);
   const totalConsults = rows.reduce((s,r)=>s+r.counts.consults,0);
   const totalFollow = rows.reduce((s,r)=>s+r.counts.followups,0);
 
+  // late entries: entries inside this window that were created after the period locked
+  const lateEntries = mode === "period"
+    ? filtered.filter(e => {
+        const created = e.id && e.id.startsWith("e_") ? Number(e.id.split("_")[1]) : null;
+        return locked && created && created > selPeriod.lockAt.getTime();
+      })
+    : [];
+
   const exportADP = () => {
-    // ADP RUN-friendly: Co Code, Batch ID, File #, Employee Name, Reg Hours, O/T Hours, Earnings types...
-    // We export a generic ADP RUN paydata layout: one row per employee with a Memo/Other Earnings amount.
-    const header = ["Co Code","Batch ID","File #","Employee Name","Other Earnings Code","Other Earnings Amount","Consults","Follow-ups","Per Diem","Per Note","Clinic Hrs","Virtual Hrs","In-Hospital Hrs","Period Start","Period End"];
+    const header = ["Co Code","Batch ID","File #","Employee Name","Other Earnings Code","Other Earnings Amount","Consults","Follow-ups","Per Diem","Per Note","Clinic Hrs","Virtual Hrs","In-Hospital Hrs","Period Start","Period End","Payday"];
     const lines = [header.join(",")];
-    rows.filter(r=>r.pay>0).forEach((r,i) => {
+    const payday = mode === "period" ? selPeriod.payday : "";
+    rows.filter(r=>r.pay>0).forEach((r) => {
       const c = r.counts;
-      const cell = v => {
-        const s = String(v ?? "");
-        return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
-      };
+      const cell = v => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
       lines.push([
         "", "", "", r.emp.name, "Other", (Math.round(r.pay*100)/100).toFixed(2),
         c.consults, c.followups, c.perdiem, c.pernote, c.clinic_hr, c.virtual_hr, c.hosp_hr,
-        from||"", to||""
+        winFrom||"", winTo||"", payday
       ].map(cell).join(","));
     });
     const blob = new Blob([lines.join("\n")], {type:"text/csv"});
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `adp_paydata_${from||"all"}_${to||"all"}.csv`;
+    const tag = mode === "period" ? `payday_${selPeriod.payday}` : `${winFrom||"all"}_${winTo||"all"}`;
+    a.href = url; a.download = `adp_paydata_${tag}.csv`;
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   };
+
+  const autoLocked = isPeriodLocked(selPeriod);
+  const manualLocked = Array.isArray(manualLocks) && manualLocks.includes(periodIdx);
 
   return (
     <div className="card">
       <h2>Roll-up</h2>
-      <p className="hint">Totals across all employees. Filter by date range, then export ADP-ready paydata.</p>
+      <p className="hint">Pick a pay period to see its totals and export ADP paydata. Periods run Sunday–Saturday (14 days), paid the Friday after close.</p>
+
+      {/* mode toggle */}
+      <div className="tabs" style={{marginBottom:18}}>
+        <button className={"tab"+(mode==="period"?" active":"")} onClick={()=>setMode("period")}>Pay period</button>
+        <button className={"tab"+(mode==="custom"?" active":"")} onClick={()=>setMode("custom")}>Custom range</button>
+      </div>
+
+      {mode === "period" && (
+        <div style={{marginBottom:18}}>
+          <label>Pay period</label>
+          <select value={periodIdx} onChange={e=>setPeriodIdx(Number(e.target.value))}>
+            {periods.map(p => (
+              <option key={p.index} value={p.index}>
+                {fmtShortYr(p.start)} – {fmtShortYr(p.end)}  ·  paid {fmtShortYr(p.payday)}
+                {p.index === currentPeriodIndex() ? "  (current)" : ""}
+              </option>
+            ))}
+          </select>
+          <div style={{display:"flex", alignItems:"center", gap:10, marginTop:10, flexWrap:"wrap"}}>
+            <span style={{fontSize:13, color:"var(--muted)"}}>
+              Payday <strong>{fmtShortYr(selPeriod.payday)}</strong>
+            </span>
+            {locked ? (
+              <span className="pill" style={{background:"var(--danger-soft)", color:"var(--danger)"}}>
+                🔒 Locked{manualLocked ? " (manual)" : autoLocked ? " (72h pre-payday)" : ""}
+              </span>
+            ) : (
+              <span className="pill" style={{background:"var(--accent-soft)", color:"var(--accent-ink)"}}>Open</span>
+            )}
+            <button className="btn btn-ghost" style={{padding:"5px 12px", fontSize:13}}
+              onClick={()=>{ toggleLock(periodIdx); showToast(manualLocked ? "Period unlocked" : "Period locked"); }}>
+              {manualLocked ? "Unlock period" : "Lock period now"}
+            </button>
+          </div>
+          {autoLocked && !manualLocked && (
+            <div className="fixed-note" style={{marginTop:6}}>
+              Auto-locked because it's within 72 hours of payday. New entries dated in this period will be flagged below.
+            </div>
+          )}
+        </div>
+      )}
+
+      {mode === "custom" && (
+        <div className="row" style={{marginBottom:18}}>
+          <div><label>From date</label><input type="date" value={from} onChange={e=>setFrom(e.target.value)} /></div>
+          <div><label>To date</label><input type="date" value={to} onChange={e=>setTo(e.target.value)} /></div>
+        </div>
+      )}
+
+      {lateEntries.length > 0 && (
+        <div className="card" style={{background:"var(--danger-soft)", border:"1px solid var(--danger)", marginBottom:18, padding:"12px 16px"}}>
+          <div style={{color:"var(--danger)", fontWeight:600, fontSize:14}}>
+            ⚠ {lateEntries.length} late {lateEntries.length===1?"entry":"entries"} added after this period locked
+          </div>
+          <div style={{fontSize:13, color:"var(--danger)", marginTop:4}}>
+            These were logged after the lock cutoff and are included in the totals above. Review before paying — someone logged work for a period you may have already processed.
+          </div>
+        </div>
+      )}
 
       <div className="metric-grid">
         <div className="metric"><div className="m-label">Total payout</div><div className="m-val">{money(grand)}</div></div>
         <div className="metric"><div className="m-label">Consults</div><div className="m-val">{totalConsults}</div></div>
         <div className="metric"><div className="m-label">Follow-ups</div><div className="m-val">{totalFollow}</div></div>
         <div className="metric"><div className="m-label">Entries</div><div className="m-val">{filtered.length}</div></div>
-      </div>
-
-      <div className="row" style={{marginBottom:18}}>
-        <div><label>From date</label><input type="date" value={from} onChange={e=>setFrom(e.target.value)} /></div>
-        <div><label>To date</label><input type="date" value={to} onChange={e=>setTo(e.target.value)} /></div>
       </div>
 
       <div className="scroll-x">
@@ -573,6 +724,7 @@ function Rollup({ employees, entries }) {
 
       <div className="actions" style={{marginTop:18}}>
         <button className="btn btn-primary" onClick={exportADP}>Export ADP CSV</button>
+        {mode === "period" && <span style={{alignSelf:"center", fontSize:13, color:"var(--muted)"}}>Period & payday auto-filled in the export.</span>}
       </div>
     </div>
   );
