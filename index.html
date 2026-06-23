@@ -71,6 +71,9 @@
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-primary:hover { background: var(--accent-ink); }
   .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-attention { background: var(--amber); color: #fff; }
+  .btn-attention:hover { filter: brightness(0.92); }
+  .btn-ghost:disabled { opacity: .55; cursor: default; }
   .btn-ghost { background: transparent; border-color: var(--line-strong); color: var(--ink); }
   .btn-ghost:hover { background: #f3f1ea; }
   .btn-danger { background: transparent; border-color: var(--line-strong); color: var(--danger); }
@@ -905,8 +908,14 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [dayDate, setDayDate] = useState(todayISO());
-  const [sortKey, setSortKey] = useState(null);     // roll-up table column sort; null = roster order
-  const [sortDir, setSortDir] = useState("desc");
+  const [sortKey, setSortKey] = useState(() => { try { return localStorage.getItem("hrgRollupSortKey") || null; } catch(e){ return null; } });   // remembered roll-up sort
+  const [sortDir, setSortDir] = useState(() => { try { return localStorage.getItem("hrgRollupSortDir") || "desc"; } catch(e){ return "desc"; } });
+  useEffect(() => {
+    try {
+      if (sortKey) { localStorage.setItem("hrgRollupSortKey", sortKey); localStorage.setItem("hrgRollupSortDir", sortDir); }
+      else { localStorage.removeItem("hrgRollupSortKey"); localStorage.removeItem("hrgRollupSortDir"); }
+    } catch (e) {}
+  }, [sortKey, sortDir]);
   const [calY, setCalY] = useState(parseDate(todayISO()).getFullYear());
   const [calM, setCalM] = useState(parseDate(todayISO()).getMonth());   // 0-11
 
@@ -1194,12 +1203,19 @@ function Rates({ employees, persistEmployees, showToast }) {
   const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(employees)));
   const [newName, setNewName] = useState("");
   const [openIds, setOpenIds] = useState(() => new Set());   // expanded employee rows; default collapsed
-  const dirtyRef = useRef(false);
+  const [dirty, setDirty] = useState(false);     // unsaved local changes? drives the Save button
+  const [saving, setSaving] = useState(false);
   const listRef = useRef(null);
+  const draftRef = useRef(draft);
+  const dirtyR = useRef(false);                  // mirror of `dirty` for use inside effects
+  const markDirty = () => { dirtyR.current = true; setDirty(true); };
+  const markClean = () => { dirtyR.current = false; setDirty(false); };
 
-  useEffect(()=>{ setDraft(JSON.parse(JSON.stringify(employees))); }, [employees]);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
+  // pull in saved data, but never clobber unsaved local edits (e.g. on a background refresh)
+  useEffect(() => { if (!dirtyR.current) setDraft(JSON.parse(JSON.stringify(employees))); }, [employees]);
 
-  // drag-to-reorder the roster (works with touch and mouse) via SortableJS
+  // drag-to-reorder the roster (touch + mouse) via SortableJS — auto-saves the new order
   useEffect(() => {
     if (!window.Sortable || !listRef.current) return;
     const s = window.Sortable.create(listRef.current, {
@@ -1210,8 +1226,10 @@ function Rates({ employees, persistEmployees, showToast }) {
       onEnd: (evt) => {
         const { oldIndex, newIndex } = evt;
         if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
-        setDraft(d => { const a = d.slice(); const [m] = a.splice(oldIndex, 1); a.splice(newIndex, 0, m); return a; });
-        dirtyRef.current = true;
+        const a = draftRef.current.slice();
+        const [m] = a.splice(oldIndex, 1); a.splice(newIndex, 0, m);
+        setDraft(a);
+        save(a, "Order saved");   // auto-save the new roster order
       },
     });
     return () => s.destroy();
@@ -1222,27 +1240,27 @@ function Rates({ employees, persistEmployees, showToast }) {
     if (!name) return;
     const id = "emp_"+Date.now()+"_"+Math.random().toString(36).slice(2,6);
     const next = [...draft, { id, name, rates: {}, fixedEligible: true }];
-    setDraft(next); setNewName(""); dirtyRef.current = true;
+    setDraft(next); setNewName(""); markDirty();
     setOpenIds(s => new Set(s).add(id));   // a freshly added employee starts expanded
   };
   const removeEmp = (id) => {
-    setDraft(draft.filter(e=>e.id!==id)); dirtyRef.current = true;
+    setDraft(draft.filter(e=>e.id!==id)); markDirty();
   };
   const setRate = (id, key, val) => {
     setDraft(draft.map(e => e.id===id ? {...e, rates:{...e.rates, [key]: val}} : e));
-    dirtyRef.current = true;
+    markDirty();
   };
   const setName = (id, val) => {
     setDraft(draft.map(e => e.id===id ? {...e, name: val} : e));
-    dirtyRef.current = true;
+    markDirty();
   };
   const setUsername = (id, val) => {
     setDraft(draft.map(e => e.id===id ? {...e, username: val} : e));
-    dirtyRef.current = true;
+    markDirty();
   };
   const setFixedElig = (id, val) => {
     setDraft(draft.map(e => e.id===id ? {...e, fixedEligible: val} : e));
-    dirtyRef.current = true;
+    markDirty();
   };
   const toggleOpen = (id) => setOpenIds(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const expandAll = () => setOpenIds(new Set(draft.map(e=>e.id)));
@@ -1256,8 +1274,8 @@ function Rates({ employees, persistEmployees, showToast }) {
     if (nRates) bits.push(nRates + " rate" + (nRates===1?"":"s"));
     return { user: u ? "@"+u : "needs username", right: bits.length ? bits.join(" · ") : "no pay set", warn: !u };
   };
-  const save = async () => {
-    const named = draft.filter(e => e.name.trim());
+  const save = async (sourceArr, quietMsg) => {
+    const named = (sourceArr || draft).filter(e => e.name.trim());
     // validation: every employee needs a username, and usernames must be unique (normalized)
     const missing = named.filter(e => !normU(e.username));
     if (missing.length) { showToast("Every employee needs a username (" + missing[0].name.trim() + " is missing one)"); return; }
@@ -1275,9 +1293,11 @@ function Rates({ employees, persistEmployees, showToast }) {
       }
       return { ...e, name: e.name.trim(), username: normU(e.username), rates, fixedEligible: !!e.fixedEligible };
     });
+    setSaving(true);
+    markClean();                       // mark clean first so the post-save sync re-syncs the cleaned draft
     await persistEmployees(clean);
-    dirtyRef.current = false;
-    showToast("Saved");
+    setSaving(false);
+    showToast(quietMsg || "Saved");
   };
 
   return (
@@ -1363,8 +1383,14 @@ function Rates({ employees, persistEmployees, showToast }) {
       </div>
 
       {draft.length>0 && (
-        <div className="actions" style={{justifyContent:"flex-end"}}>
-          <button className="btn btn-primary" onClick={save}>Save changes</button>
+        <div className="actions" style={{justifyContent:"flex-end", alignItems:"center", gap:12}}>
+          <span style={{fontSize:13, color: dirty ? "var(--amber)" : "var(--accent-ink)"}}>
+            {saving ? "Saving…" : dirty ? "● Unsaved changes" : "✓ All changes saved"}
+          </span>
+          <button className={"btn " + (dirty && !saving ? "btn-attention" : "btn-ghost")}
+            onClick={()=>save()} disabled={saving || !dirty}>
+            {saving ? "Saving…" : dirty ? "Save changes" : "✓ Saved"}
+          </button>
         </div>
       )}
     </div>
