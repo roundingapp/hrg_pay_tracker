@@ -1540,16 +1540,22 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   };
   // validate the roster → {clean} or {error}
   const buildClean = (source) => {
-    const named = source.filter(e => e.name.trim());
+    // Keep any row with real content, so clearing a name to retype never DELETES the person.
+    // Only an entirely-empty row (an abandoned "Add employee") is dropped.
+    const hasContent = (e) => e.name.trim() || normU(e.username) || String(e.email||"").trim() || e.salaryOnly || e.isManager || e.managedBy || Number(e.annualSalary) > 0 || (e.rates && Object.values(e.rates).some(v => Number(v) > 0));
+    const kept = source.filter(hasContent);
+    // a blank name BLOCKS the save (it just waits) rather than dropping that person
+    const noName = kept.find(e => !e.name.trim());
+    if (noName) return { error: "Every person needs a name — finish typing and it'll save." };
     // username required for everyone who logs in (salary-only people don't)
-    const missing = named.find(e => !e.salaryOnly && !normU(e.username));
+    const missing = kept.find(e => !e.salaryOnly && !normU(e.username));
     if (missing) return { error: "Add a username for " + missing.name.trim() + " (or mark them salary-only)" };
     const seen = {};
-    for (const e of named) { const u = normU(e.username); if (!u) continue; if (seen[u]) return { error: 'Username "'+u+'" is used twice — make it unique' }; seen[u] = true; }
+    for (const e of kept) { const u = normU(e.username); if (!u) continue; if (seen[u]) return { error: 'Username "'+u+'" is used twice — make it unique' }; seen[u] = true; }
     const seenE = {};
-    for (const e of named) { const em = String(e.email||"").trim().toLowerCase(); if (!em) continue; if (seenE[em]) return { error: 'Email "'+em+'" is used by two people — make it unique' }; seenE[em] = true; }
+    for (const e of kept) { const em = String(e.email||"").trim().toLowerCase(); if (!em) continue; if (seenE[em]) return { error: 'Email "'+em+'" is used by two people — make it unique' }; seenE[em] = true; }
     const salariesMap = {};
-    const clean = named.map(e => {
+    const clean = kept.map(e => {
       const rates = {};
       for (const t of VARIABLE) { const v = e.rates?.[t.key]; if (v !== "" && v != null && !isNaN(Number(v)) && Number(v) > 0) rates[t.key] = Number(v); }
       const out = { ...e, name: e.name.trim(), username: normU(e.username), email: String(e.email||"").trim().toLowerCase(), rates, fixedEligible: !!e.fixedEligible };
