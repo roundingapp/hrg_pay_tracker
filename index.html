@@ -130,6 +130,29 @@
   .tag { display:inline-block; font-size:11px; padding:2px 8px; border-radius:6px; background:var(--amber-soft); color:var(--amber); font-weight:500; margin-left:8px;}
   .scroll-x { overflow-x: auto; }
   .savebar { position: sticky; bottom: 0; background: linear-gradient(transparent, var(--bg) 40%); padding: 16px 0 4px; display:flex; gap:10px; justify-content:flex-end; }
+
+  /* ----- pay-period day grid (calendar date picker) ----- */
+  .period-nav { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  .period-nav .pn-label { font-weight:600; font-size:15px; font-variant-numeric:tabular-nums; }
+  .period-nav button { width:34px; height:34px; border:1px solid var(--line-strong); background:#fff; border-radius:8px; cursor:pointer; font-size:18px; line-height:1; color:var(--ink); }
+  .period-nav button:hover:not(:disabled) { background:#f3f1ea; }
+  .period-nav button:disabled { opacity:.35; cursor:default; }
+  .period-total { font-size:13px; color:var(--muted); }
+  .week-grid { display:grid; grid-template-columns: repeat(7, 1fr); gap:6px; }
+  .week-grid .dow { font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--faint); text-align:center; padding-bottom:2px; }
+  .day-cell { border:1px solid var(--line); border-radius:10px; padding:8px 4px; min-height:60px; cursor:pointer; background:#fff;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; transition:border-color .12s, background .12s; }
+  .day-cell:hover { border-color:var(--accent); }
+  .day-cell .dnum { font-size:15px; font-weight:600; color:var(--ink); }
+  .day-cell .damt { font-size:12px; font-weight:600; color:var(--accent-ink); font-variant-numeric:tabular-nums; }
+  .day-cell .dempty { font-size:13px; color:var(--faint); }
+  .day-cell.logged { background:#f4faf7; }
+  .day-cell.today { border-color:var(--accent); }
+  .day-cell.today .dnum { color:var(--accent); }
+  .day-cell.locked { background:var(--amber-soft); }
+  .day-cell.locked .dnum { color:var(--amber); }
+  .day-cell.selected { border-color:var(--accent); background:var(--accent-soft); box-shadow:0 0 0 2px var(--accent-soft); }
+  @media (max-width:600px){ .day-cell{ min-height:52px; padding:6px 2px; gap:2px; } .day-cell .dnum{font-size:13px;} .day-cell .damt,.day-cell .dempty{font-size:11px;} .week-grid{gap:4px;} }
 </style>
 </head>
 <body>
@@ -187,6 +210,12 @@ const VARIABLE = [
 const ALL_TYPES = [...FIXED, ...VARIABLE];
 const isFixed = key => FIXED.some(f => f.key === key);
 const isDecimal = key => VARIABLE.some(v => v.key === key && v.decimal);
+// dollar value of a counts map for a given employee (per-emp rates for variable types)
+const payForCounts = (counts, emp) => ALL_TYPES.reduce((s,t) => {
+  const qty = Number((counts||{})[t.key] || 0);
+  const rate = isFixed(t.key) ? t.rate : Number(emp && emp.rates ? emp.rates[t.key] : 0) || 0;
+  return s + qty*rate;
+}, 0);
 // round quantities: decimals to 2 places, counts to int
 const qtyRound = (key, v) => isDecimal(key) ? Math.round(v*100)/100 : Math.round(v);
 const normU = s => String(s||"").trim().toLowerCase();
@@ -324,6 +353,19 @@ function App() {
     await sSet("entries", next);
   }, []);
 
+  // upsert by (empId, date): one entry per person per day. re-reads latest to avoid
+  // clobbering a concurrent device, drops any same-day rows (incl. legacy duplicates),
+  // and if the day has no counts left it removes the row entirely so a day can be cleared.
+  const upsertEntry = useCallback(async (entry) => {
+    const latest = await sGet("entries", []);
+    const rest = (latest || []).filter(e => !(e.empId === entry.empId && e.date === entry.date));
+    const hasAny = entry.counts && Object.values(entry.counts).some(v => Number(v) > 0);
+    const next = hasAny ? [...rest, entry] : rest;
+    setEntries(next);
+    await sSet("entries", next);
+    return hasAny;
+  }, []);
+
   const showToast = useCallback((msg) => {
     setToast(msg);
     setTimeout(() => setToast(""), 2200);
@@ -348,7 +390,7 @@ function App() {
       </div>
 
       {tab==="entry" && (
-        <EntryView employees={employees} entries={entries} addEntry={addEntry} manualLocks={manualLocks} showToast={showToast} />
+        <EntryView employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast} />
       )}
       {tab==="owner" && (
         ownerUnlocked
@@ -383,10 +425,11 @@ function LockScreen({ onUnlock, showToast }) {
 }
 
 /* ---------- entry view ---------- */
-function EntryView({ employees, entries, addEntry, manualLocks, showToast }) {
+function EntryView({ employees, entries, upsertEntry, manualLocks, showToast }) {
   const [uname, setUname] = useState("");
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
+  const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
 
   // resolve employee from typed username (normalized). null until a real match.
   const typed = normU(uname);
@@ -396,6 +439,33 @@ function EntryView({ employees, entries, addEntry, manualLocks, showToast }) {
 
   // is the chosen date inside a period that's already locked?
   const dateLocked = date ? dateInLockedPeriod(date, manualLocks) : false;
+
+  // ----- pay-period grid -----
+  const maxPeriodIdx = currentPeriodIndex() + 1;            // can log the upcoming period, not the far future
+  const period = periodByIndex(periodIdx);
+  const periodDays = Array.from({length: PERIOD_LEN_DAYS}, (_, i) => fmtISO(addDays(parseDate(period.start), i)));
+  const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+  // this employee's saved rows for an ISO day (legacy data may hold >1), and their dollar value
+  const dayEntries = (iso) => (emp ? entries.filter(e => e.empId === emp.id && e.date === iso) : []);
+  const dayDollars = (iso) => dayEntries(iso).reduce((s,e) => s + payForCounts(e.counts, emp), 0);
+  const periodDollars = periodDays.reduce((s,iso) => s + dayDollars(iso), 0);
+
+  // when navigating to another period, pull the selected day into that period
+  useEffect(() => {
+    if (periodIndexFor(date) !== periodIdx) setDate(period.start);
+  }, [periodIdx]);
+
+  // load the selected day's saved counts (merging any legacy duplicate rows) whenever the
+  // day or the verified employee changes — so tapping a day shows what's there to edit
+  useEffect(() => {
+    if (!emp) return;
+    const merged = {};
+    dayEntries(date).forEach(e => Object.entries(e.counts || {}).forEach(([k,v]) => {
+      merged[k] = (merged[k] || 0) + Number(v || 0);
+    }));
+    setCounts(merged);
+  }, [date, emp && emp.id]);
 
   const visibleTypes = emp ? ALL_TYPES.filter(t => {
     if (isFixed(t.key)) return !!emp.fixedEligible;
@@ -419,11 +489,13 @@ function EntryView({ employees, entries, addEntry, manualLocks, showToast }) {
   const submit = async () => {
     if (!emp) { showToast("Enter a valid username first"); return; }
     const hasAny = Object.values(counts).some(v => Number(v) > 0);
-    if (!hasAny) { showToast("Enter at least one count"); return; }
-    const entry = { id: "e_"+Date.now()+"_"+Math.random().toString(36).slice(2,7), empId: emp.id, username: typed, date, counts: {...counts} };
-    await addEntry(entry);
-    setCounts({});
-    showToast("Saved · " + money(liveTotal) + " · " + emp.name);
+    const existing = dayEntries(date);
+    if (!hasAny && existing.length === 0) { showToast("Enter at least one count"); return; }
+    // preserve the existing row's id when editing an already-logged day
+    const id = (existing[0] && existing[0].id) || ("e_"+Date.now()+"_"+Math.random().toString(36).slice(2,7));
+    const entry = { id, empId: emp.id, username: typed, date, counts: {...counts} };
+    const kept = await upsertEntry(entry);
+    showToast(kept ? ("Saved · " + money(liveTotal) + " · " + fmtShortYr(date)) : ("Cleared · " + fmtShortYr(date)));
   };
 
   if (!employees.length) {
@@ -435,40 +507,68 @@ function EntryView({ employees, entries, addEntry, manualLocks, showToast }) {
       <h2>Log your work</h2>
       <p className="hint">Enter your assigned username to begin. Your counts unlock once your username is recognized.</p>
 
-      <div className="row">
-        <div>
-          <label>Username</label>
-          <input type="text" value={uname} autoComplete="off"
-            onChange={e=>{setUname(e.target.value); setCounts({});}}
-            placeholder="Enter your username"
-            style={ typed ? {borderColor: emp ? "var(--accent)" : "var(--danger)"} : null } />
-          {typed && !emp && !ambiguous && (
-            <div className="fixed-note" style={{color:"var(--danger)", marginTop:6}}>
-              Username not recognized. Check your spelling or ask the owner for your username.
-            </div>
-          )}
-          {ambiguous && (
-            <div className="fixed-note" style={{color:"var(--danger)", marginTop:6}}>
-              This username is assigned to more than one person — tell the owner to fix it.
-            </div>
-          )}
-          {emp && (
-            <div className="fixed-note" style={{color:"var(--accent-ink)", marginTop:6}}>
-              Verified — you're logging as {emp.name}.
-            </div>
-          )}
-        </div>
-        <div>
-          <label>Date</label>
-          <input type="date" value={date} onChange={e=>setDate(e.target.value)}
-            style={ dateLocked ? {borderColor:"var(--amber)"} : null } />
-          {dateLocked && (
-            <div className="fixed-note" style={{color:"var(--amber)", marginTop:6}}>
-              Heads up: this date is in a pay period that's already locked for payroll. You can still save, but the owner will be notified it came in late.
-            </div>
-          )}
-        </div>
+      <div>
+        <label>Username</label>
+        <input type="text" value={uname} autoComplete="off"
+          onChange={e=>{setUname(e.target.value); setCounts({});}}
+          placeholder="Enter your username"
+          style={ typed ? {borderColor: emp ? "var(--accent)" : "var(--danger)"} : null } />
+        {typed && !emp && !ambiguous && (
+          <div className="fixed-note" style={{color:"var(--danger)", marginTop:6}}>
+            Username not recognized. Check your spelling or ask the owner for your username.
+          </div>
+        )}
+        {ambiguous && (
+          <div className="fixed-note" style={{color:"var(--danger)", marginTop:6}}>
+            This username is assigned to more than one person — tell the owner to fix it.
+          </div>
+        )}
+        {emp && (
+          <div className="fixed-note" style={{color:"var(--accent-ink)", marginTop:6}}>
+            Verified — you're logging as {emp.name}.
+          </div>
+        )}
       </div>
+
+      {emp && (
+        <>
+          <div style={{height:22}} />
+          <div className="period-nav">
+            <div style={{display:"flex", alignItems:"center", gap:10}}>
+              <button onClick={()=>setPeriodIdx(i=>i-1)} aria-label="Previous pay period">‹</button>
+              <div className="pn-label">{fmtShortYr(period.start)} – {fmtShortYr(period.end)}</div>
+              <button onClick={()=>setPeriodIdx(i=>Math.min(maxPeriodIdx, i+1))} disabled={periodIdx>=maxPeriodIdx} aria-label="Next pay period">›</button>
+            </div>
+            <div className="period-total">This period:<span className="pay" style={{marginLeft:6}}>{money(periodDollars)}</span></div>
+          </div>
+          <p className="hint" style={{marginTop:0, marginBottom:10}}>Tap a day to add or edit its counts. Payday {period.paydayLabel}.</p>
+          <div className="week-grid">
+            {DOW.map(d => <div className="dow" key={"dow-"+d}>{d}</div>)}
+            {periodDays.map(iso => {
+              const logged = dayEntries(iso).length > 0;
+              const locked = dateInLockedPeriod(iso, manualLocks);
+              const cls = "day-cell"
+                + (iso===date ? " selected" : "")
+                + (logged ? " logged" : "")
+                + (iso===todayISO() ? " today" : "")
+                + (locked ? " locked" : "");
+              return (
+                <div className={cls} key={iso} onClick={()=>setDate(iso)}>
+                  <div className="dnum">{parseDate(iso).getDate()}{locked ? " 🔒" : ""}</div>
+                  {logged
+                    ? <div className="damt">{money(dayDollars(iso))}</div>
+                    : <div className="dempty">—</div>}
+                </div>
+              );
+            })}
+          </div>
+          {dateLocked && (
+            <div className="fixed-note" style={{color:"var(--amber)", marginTop:12}}>
+              Heads up: {fmtShortYr(date)} is in a pay period that's already locked for payroll. You can still save, but the owner will be notified it came in late.
+            </div>
+          )}
+        </>
+      )}
 
       {emp && visibleTypes.length === 0 && (
         <div className="empty" style={{marginTop:20}}>
@@ -477,7 +577,10 @@ function EntryView({ employees, entries, addEntry, manualLocks, showToast }) {
       )}
       {emp && visibleTypes.length > 0 && (
         <>
-          <div style={{height:20}} />
+          <div style={{height:18}} />
+          <label style={{marginBottom:10}}>
+            Counts for {fmtShortYr(date)}{dayEntries(date).length ? " — editing your saved day" : ""}
+          </label>
           <div className="counter-grid">
             {visibleTypes.map(t => {
               const rate = isFixed(t.key) ? t.rate : Number(emp.rates?.[t.key]||0);
