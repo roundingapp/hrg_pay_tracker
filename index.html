@@ -175,8 +175,10 @@
 <!-- ============================================================= -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getFirestore, doc, getDoc, setDoc }
+  import { getFirestore, doc, getDoc, setDoc, collection, getDocs }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
   // ↓↓↓↓↓  REPLACE EVERYTHING BETWEEN THE BRACES WITH YOUR OWN CONFIG  ↓↓↓↓↓
   const firebaseConfig = {
@@ -191,7 +193,9 @@
 
   const app = initializeApp(firebaseConfig);
   window._db = getFirestore(app);
-  window._fs = { doc, getDoc, setDoc };
+  window._fs = { doc, getDoc, setDoc, collection, getDocs };
+  window._auth = getAuth(app);
+  window._authfns = { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail };
   window._firebaseReady = true;
   window.dispatchEvent(new Event("firebase-ready"));
 </script>
@@ -205,7 +209,11 @@
 const { useState, useEffect, useCallback, useRef } = React;
 
 /* ---------- config ---------- */
-const OWNER_PASS = "amp2026";
+const OWNER_EMAILS = ["sutaria.neil@gmail.com", "ssutaria@houstonrenal.com"];
+const NP_EMAIL_DOMAIN = "hrg-np.local";
+const isOwnerUser = (u) => !!u && OWNER_EMAILS.includes(String(u.email||"").toLowerCase());
+// NPs log in with a username; map it to a fixed internal email for Firebase Auth
+const npEmailFor = (username) => String(username||"").trim().toLowerCase().replace(/[^a-z0-9._-]/g,"") + "@" + NP_EMAIL_DOMAIN;
 const FIXED = [
   { key: "consults",  label: "Consults",   rate: 60, unit: "ea" },
   { key: "followups", label: "Follow-ups", rate: 30, unit: "ea" },
@@ -318,37 +326,88 @@ async function sSet(key, val) {
   } catch (e) { console.error("write failed", e); return false; }
 }
 
+/* ---------- per-NP entries (collection "paytracker_entries", one doc per auth uid) ----------
+   Each NP can read/write only their own doc; the owner can read every doc.
+   Document shape matches the rest of the app: { value: [ {id,empId,username,date,counts,other} ] } */
+async function loadEntriesForUid(uid) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", uid);
+    const snap = await window._fs.getDoc(ref);
+    if (snap.exists() && snap.data() && "value" in snap.data()) return snap.data().value || [];
+    return [];
+  } catch (e) { console.error("entries read failed", e); return []; }
+}
+async function saveEntriesForUid(uid, val) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", uid);
+    await window._fs.setDoc(ref, { value: val });
+    return true;
+  } catch (e) { console.error("entries write failed", e); return false; }
+}
+// owner-only: merge every NP's entries, tagging each with the uid doc it came from
+async function loadAllEntries() {
+  try {
+    const snap = await window._fs.getDocs(window._fs.collection(window._db, "paytracker_entries"));
+    const all = [];
+    snap.forEach(d => {
+      const v = (d.data() && d.data().value) || [];
+      v.forEach(e => all.push({ ...e, _uid: d.id }));
+    });
+    return all;
+  } catch (e) { console.error("all-entries read failed", e); return []; }
+}
+
 /* ---------- app ---------- */
 function App() {
   const [loaded, setLoaded] = useState(false);
+  const [authUser, setAuthUser] = useState(undefined);   // undefined=checking, null=signed out, object=signed in
   const [tab, setTab] = useState("entry");
   const [employees, setEmployees] = useState([]); // {id,name,rates:{}}
-  const [entries, setEntries] = useState([]);      // {id,empId,date,counts:{}}
-  const [manualLocks, setManualLocks] = useState([]); // array of period index numbers locked early by owner
+  const [entries, setEntries] = useState([]);     // owner: everyone's (tagged _uid); NP: just theirs
+  const [manualLocks, setManualLocks] = useState([]);
   const [toast, setToast] = useState("");
-  const [ownerUnlocked, setOwnerUnlocked] = useState(false);
 
-  const refresh = useCallback(async () => {
-    const emps = await sGet("employees", null);
-    const ents = await sGet("entries", []);
-    const locks = await sGet("manualLocks", []);
-    setEmployees(emps && emps.length ? emps : []);
-    setEntries(ents || []);
-    setManualLocks(Array.isArray(locks) ? locks : []);
+  const isOwner = isOwnerUser(authUser);
+  const uid = authUser ? authUser.uid : null;
+  // the signed-in NP's own employee record, matched by their internal login email
+  const myEmp = (authUser && !isOwner)
+    ? employees.find(e => npEmailFor(e.username) === String(authUser.email||"").toLowerCase())
+    : null;
+
+  const showToast = useCallback((msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 2200);
   }, []);
 
+  // load the data appropriate to whoever is signed in
+  const refresh = useCallback(async (user) => {
+    const u = user || (window._auth && window._auth.currentUser);
+    if (!u) { setEmployees([]); setEntries([]); setManualLocks([]); return; }
+    const emps = await sGet("employees", null);
+    const locks = await sGet("manualLocks", []);
+    setEmployees(emps && emps.length ? emps : []);
+    setManualLocks(Array.isArray(locks) ? locks : []);
+    setEntries(isOwnerUser(u) ? await loadAllEntries() : await loadEntriesForUid(u.uid));
+  }, []);
+
+  // watch auth state; (re)load data whenever the signed-in user changes
   useEffect(() => {
-    (async () => { await refresh(); setLoaded(true); })();
-    // re-pull when the user returns to this tab/window, so each device
-    // sees others' latest entries without a manual reload
-    const onFocus = () => { refresh(); };
+    if (!window._auth || !window._authfns) { setAuthUser(null); setLoaded(true); return; }
+    return window._authfns.onAuthStateChanged(window._auth, async (u) => {
+      setAuthUser(u || null);
+      await refresh(u);
+      setLoaded(true);
+    });
+  }, [refresh]);
+
+  // re-pull when returning to the tab so each device sees the latest
+  useEffect(() => {
+    const onFocus = () => { if (window._auth && window._auth.currentUser) refresh(); };
     window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
     return () => window.removeEventListener("focus", onFocus);
   }, [refresh]);
 
   const persistEmployees = useCallback(async (next) => { setEmployees(next); await sSet("employees", next); }, []);
-  const persistEntries   = useCallback(async (next) => { setEntries(next); await sSet("entries", next); }, []);
   const toggleLock = useCallback(async (periodIndex) => {
     const latest = await sGet("manualLocks", []);
     const set = new Set(Array.isArray(latest) ? latest : []);
@@ -357,34 +416,33 @@ function App() {
     setManualLocks(next);
     await sSet("manualLocks", next);
   }, []);
-  // safe append: re-read latest entries first so two devices submitting
-  // close together don't overwrite each other (last-write-wins guard)
-  const addEntry = useCallback(async (entry) => {
-    const latest = await sGet("entries", []);
-    const next = [...(latest || []), entry];
-    setEntries(next);
-    await sSet("entries", next);
-  }, []);
 
-  // upsert by (empId, date): one entry per person per day. re-reads latest to avoid
-  // clobbering a concurrent device, drops any same-day rows (incl. legacy duplicates),
-  // and if the day has no counts left it removes the row entirely so a day can be cleared.
+  // NP upsert: one row per (empId,date) inside this NP's own entries doc
   const upsertEntry = useCallback(async (entry) => {
-    const latest = await sGet("entries", []);
-    const rest = (latest || []).filter(e => !(e.empId === entry.empId && e.date === entry.date));
+    if (!uid) return false;
+    const latest = await loadEntriesForUid(uid);
+    const rest = latest.filter(e => !(e.empId === entry.empId && e.date === entry.date));
     const hasCounts = entry.counts && Object.values(entry.counts).some(v => Number(v) > 0);
     const hasOther = entry.other && Number(entry.other.amount) > 0;
     const hasAny = hasCounts || hasOther;
     const next = hasAny ? [...rest, entry] : rest;
     setEntries(next);
-    await sSet("entries", next);
+    await saveEntriesForUid(uid, next);
     return hasAny;
+  }, [uid]);
+
+  // owner deletes an entry from whichever NP doc it came from (tagged _uid on merge)
+  const deleteOwnerEntry = useCallback(async (entry) => {
+    if (!entry || !entry._uid) return;
+    const latest = await loadEntriesForUid(entry._uid);
+    await saveEntriesForUid(entry._uid, latest.filter(e => e.id !== entry.id));
+    setEntries(await loadAllEntries());
   }, []);
 
-  const showToast = useCallback((msg) => {
-    setToast(msg);
-    setTimeout(() => setToast(""), 2200);
-  }, []);
+  const signOutNow = useCallback(async () => {
+    try { await window._authfns.signOut(window._auth); } catch (e) {}
+    setTab("entry"); showToast("Signed out");
+  }, [showToast]);
 
   if (!loaded) return <div className="wrap"><div className="empty">Loading…</div></div>;
 
@@ -395,25 +453,25 @@ function App() {
       </div>
       <div className="topbar">
         <h1>Pay Tracker</h1>
-        <span className="pill">{employees.length} employee{employees.length===1?"":"s"}</span>
+        {authUser && (isOwner || myEmp) && (
+          <button className="btn btn-ghost" style={{fontSize:13, padding:"6px 12px"}} onClick={signOutNow}>Sign out</button>
+        )}
       </div>
 
-      {/* Owner tabs are hidden until the owner passcode is entered in the username field on the Log-entries screen */}
-      {ownerUnlocked && (
-        <div className="tabs">
-          <button className={"tab"+(tab==="entry"?" active":"")} onClick={()=>setTab("entry")}>Log entries</button>
-          <button className={"tab"+(tab==="owner"?" active":"")} onClick={()=>setTab("owner")}>Owner roll-up</button>
-          <button className="tab" onClick={()=>{ setOwnerUnlocked(false); setTab("entry"); showToast("Owner view locked"); }}>Lock 🔒</button>
-        </div>
+      {/* signed out → login (NP username, or owner email) */}
+      {!authUser && <LoginScreen showToast={showToast} />}
+
+      {/* signed in as owner → full panel */}
+      {isOwner && (
+        <OwnerView employees={employees} entries={entries} manualLocks={manualLocks} toggleLock={toggleLock}
+          persistEmployees={persistEmployees} deleteEntry={deleteOwnerEntry} showToast={showToast} />
       )}
 
-      {tab==="entry" && (
-        <EntryView employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast}
-          onOwnerUnlock={()=>{ setOwnerUnlocked(true); setTab("owner"); showToast("Owner roll-up unlocked"); }} />
-      )}
-      {tab==="owner" && ownerUnlocked && (
-        <OwnerView employees={employees} entries={entries} manualLocks={manualLocks} toggleLock={toggleLock}
-          persistEmployees={persistEmployees} persistEntries={persistEntries} showToast={showToast} />
+      {/* signed in as NP → only their own entry screen */}
+      {authUser && !isOwner && (
+        myEmp
+          ? <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast} />
+          : <div className="card"><div className="empty">You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees &amp; rates, then sign out and back in.</div></div>
       )}
 
       <div className={"toast"+(toast?" show":"")}>{toast}</div>
@@ -421,41 +479,145 @@ function App() {
   );
 }
 
-/* ---------- lock screen ---------- */
-function LockScreen({ onUnlock, showToast }) {
-  const [pw, setPw] = useState("");
-  const tryUnlock = () => {
-    if (pw === OWNER_PASS) onUnlock();
-    else showToast("Incorrect passcode");
-  };
+/* ---------- login (NP username / owner email) ---------- */
+function LoginScreen({ showToast }) {
+  const [mode, setMode] = useState("np");   // "np" | "owner"
   return (
     <div className="card lock-screen">
-      <h2>Owner access</h2>
-      <p className="hint">Enter the owner passcode to set pay rates and view the full roll-up.</p>
-      <label>Passcode</label>
-      <input type="password" value={pw} onChange={e=>setPw(e.target.value)}
-        onKeyDown={e=>e.key==="Enter"&&tryUnlock()} placeholder="••••••" />
+      {mode === "np" ? <NPLogin showToast={showToast} /> : <OwnerLogin showToast={showToast} />}
       <div style={{height:14}} />
-      <button className="btn btn-primary" style={{width:"100%"}} onClick={tryUnlock}>Unlock</button>
+      <button className="btn btn-ghost" style={{width:"100%", fontSize:13}}
+        onClick={()=>setMode(mode==="np"?"owner":"np")}>
+        {mode==="np" ? "Owner sign in" : "Back to staff sign in"}
+      </button>
     </div>
   );
 }
 
+// NP login: enter username → first time sets a password, after that signs in
+function NPLogin({ showToast }) {
+  const [username, setUsername] = useState("");
+  const [pw, setPw] = useState("");
+  const [stage, setStage] = useState("user");   // "user" | "signin" | "create"
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const email = npEmailFor(username);
+
+  const checkUser = async (e) => {
+    if (e) e.preventDefault();
+    setErr("");
+    if (!String(username||"").trim()) { setErr("Enter your username."); return; }
+    setBusy(true);
+    try {
+      const methods = await window._authfns.fetchSignInMethodsForEmail(window._auth, email);
+      setStage(methods && methods.length ? "signin" : "create");
+    } catch (ex) { setStage("signin"); }
+    finally { setBusy(false); }
+  };
+  const doSignIn = async (e) => {
+    if (e) e.preventDefault();
+    setErr(""); setBusy(true);
+    try { await window._authfns.signInWithEmailAndPassword(window._auth, email, pw); }
+    catch (ex) { setErr("Wrong password. Try again."); }
+    finally { setBusy(false); }
+  };
+  const doCreate = async (e) => {
+    if (e) e.preventDefault();
+    setErr("");
+    if (pw.length < 6) { setErr("Pick a password of at least 6 characters."); return; }
+    setBusy(true);
+    try { await window._authfns.createUserWithEmailAndPassword(window._auth, email, pw); showToast("Password set — you're in."); }
+    catch (ex) { setErr(ex && ex.code === "auth/email-already-in-use" ? "That username already has a password — go back and sign in." : "Couldn't set up your login."); }
+    finally { setBusy(false); }
+  };
+
+  if (stage === "user") {
+    return (
+      <form onSubmit={checkUser}>
+        <h2>Staff sign in</h2>
+        <p className="hint">Enter your username. First time? You'll set a password next.</p>
+        <label>Username</label>
+        <input type="text" autoComplete="username" value={username} onChange={e=>setUsername(e.target.value)} placeholder="your username" autoFocus />
+        {err && <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>{err}</div>}
+        <div style={{height:14}} />
+        <button type="submit" className="btn btn-primary" style={{width:"100%"}} disabled={busy}>{busy?"Checking…":"Continue"}</button>
+      </form>
+    );
+  }
+  const backBtn = (
+    <>
+      <div style={{height:8}} />
+      <button type="button" className="btn btn-ghost" style={{width:"100%"}} onClick={()=>{ setStage("user"); setPw(""); setErr(""); }}>Use a different username</button>
+    </>
+  );
+  if (stage === "signin") {
+    return (
+      <form onSubmit={doSignIn}>
+        <h2>Welcome back</h2>
+        <p className="hint">Signing in as <strong>{npEmailFor(username).split("@")[0]}</strong>.</p>
+        <input type="text" autoComplete="username" value={npEmailFor(username).split("@")[0]} readOnly style={{display:"none"}} />
+        <label>Password</label>
+        <input type="password" autoComplete="current-password" value={pw} onChange={e=>setPw(e.target.value)} autoFocus />
+        {err && <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>{err}</div>}
+        <div style={{height:14}} />
+        <button type="submit" className="btn btn-primary" style={{width:"100%"}} disabled={busy}>{busy?"Signing in…":"Sign in"}</button>
+        {backBtn}
+      </form>
+    );
+  }
+  return (
+    <form onSubmit={doCreate}>
+      <h2>Set your password</h2>
+      <p className="hint">First time for <strong>{npEmailFor(username).split("@")[0]}</strong>. Choose a password (6+ characters) — your browser can save it.</p>
+      <input type="text" autoComplete="username" value={npEmailFor(username).split("@")[0]} readOnly style={{display:"none"}} />
+      <label>New password</label>
+      <input type="password" autoComplete="new-password" value={pw} onChange={e=>setPw(e.target.value)} autoFocus />
+      {err && <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>{err}</div>}
+      <div style={{height:14}} />
+      <button type="submit" className="btn btn-primary" style={{width:"100%"}} disabled={busy}>{busy?"Setting up…":"Set password & sign in"}</button>
+      {backBtn}
+    </form>
+  );
+}
+
+function OwnerLogin({ showToast }) {
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const submit = async (e) => {
+    if (e) e.preventDefault();
+    setErr(""); setBusy(true);
+    try {
+      const cred = await window._authfns.signInWithEmailAndPassword(window._auth, email.trim(), pw);
+      if (!isOwnerUser(cred.user)) { await window._authfns.signOut(window._auth); setErr("That account isn't an owner."); }
+    } catch (ex) { setErr("Wrong email or password."); }
+    finally { setBusy(false); }
+  };
+  return (
+    <form onSubmit={submit}>
+      <h2>Owner sign in</h2>
+      <p className="hint">For pay rates and the full roll-up. Your browser can save this.</p>
+      <label>Email</label>
+      <input type="email" autoComplete="username" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" autoFocus />
+      <div style={{height:12}} />
+      <label>Password</label>
+      <input type="password" autoComplete="current-password" value={pw} onChange={e=>setPw(e.target.value)} />
+      {err && <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>{err}</div>}
+      <div style={{height:14}} />
+      <button type="submit" className="btn btn-primary" style={{width:"100%"}} disabled={busy}>{busy?"Signing in…":"Sign in"}</button>
+    </form>
+  );
+}
+
 /* ---------- entry view ---------- */
-function EntryView({ employees, entries, upsertEntry, manualLocks, showToast, onOwnerUnlock }) {
-  const [uname, setUname] = useState("");
+function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
   const [otherOn, setOtherOn] = useState(false);     // "Other" one-off pay for the selected day
   const [otherAmt, setOtherAmt] = useState("");
   const [otherNote, setOtherNote] = useState("");
-
-  // resolve employee from typed username (normalized). null until a real match.
-  const typed = normU(uname);
-  const matched = typed ? employees.filter(e => normU(e.username) === typed) : [];
-  const emp = matched.length === 1 ? matched[0] : null;
-  const ambiguous = matched.length > 1; // shouldn't happen if owner-panel enforces uniqueness
 
   // is the chosen date inside a period that's already locked?
   const dateLocked = date ? dateInLockedPeriod(date, manualLocks) : false;
@@ -491,11 +653,6 @@ function EntryView({ employees, entries, upsertEntry, manualLocks, showToast, on
     else { setOtherOn(false); setOtherAmt(""); setOtherNote(""); }
   }, [date, emp && emp.id]);
 
-  // typing the owner passcode into the username field unlocks the (otherwise hidden) owner roll-up
-  useEffect(() => {
-    if (normU(uname) === OWNER_PASS) { setUname(""); setCounts({}); onOwnerUnlock && onOwnerUnlock(); }
-  }, [uname]);
-
   const visibleTypes = emp ? ALL_TYPES.filter(t => {
     if (isFixed(t.key)) return !!emp.fixedEligible;
     const r = emp.rates?.[t.key];
@@ -530,43 +687,16 @@ function EntryView({ employees, entries, upsertEntry, manualLocks, showToast, on
     if (!hasCounts && !other && existing.length === 0) { showToast("Enter at least one count or an Other amount"); return; }
     // preserve the existing row's id when editing an already-logged day
     const id = (existing[0] && existing[0].id) || ("e_"+Date.now()+"_"+Math.random().toString(36).slice(2,7));
-    const entry = { id, empId: emp.id, username: typed, date, counts: {...counts} };
+    const entry = { id, empId: emp.id, username: normU(emp.username), date, counts: {...counts} };
     if (other) entry.other = other;
     const kept = await upsertEntry(entry);
     showToast(kept ? ("Saved · " + money(liveTotal) + " · " + fmtShortYr(date)) : ("Cleared · " + fmtShortYr(date)));
   };
 
-  if (!employees.length) {
-    return <div className="card"><div className="empty">No employees yet. Unlock the owner roll-up to add your staff and set their pay rates.</div></div>;
-  }
-
   return (
     <div className="card">
       <h2>Log your work</h2>
-      <p className="hint">Enter your assigned username to begin. Your counts unlock once your username is recognized.</p>
-
-      <div>
-        <label>Username</label>
-        <input type="text" value={uname} autoComplete="off"
-          onChange={e=>{setUname(e.target.value); setCounts({});}}
-          placeholder="Enter your username"
-          style={ typed ? {borderColor: emp ? "var(--accent)" : "var(--danger)"} : null } />
-        {typed && !emp && !ambiguous && (
-          <div className="fixed-note" style={{color:"var(--danger)", marginTop:6}}>
-            Username not recognized. Check your spelling or ask the owner for your username.
-          </div>
-        )}
-        {ambiguous && (
-          <div className="fixed-note" style={{color:"var(--danger)", marginTop:6}}>
-            This username is assigned to more than one person — tell the owner to fix it.
-          </div>
-        )}
-        {emp && (
-          <div className="fixed-note" style={{color:"var(--accent-ink)", marginTop:6}}>
-            Verified — you're logging as {emp.name}.
-          </div>
-        )}
-      </div>
+      <p className="hint">Logging as <strong>{emp.name}</strong> (@{normU(emp.username)}). Tap a day below to add or edit it.</p>
 
       {emp && (
         <>
@@ -693,7 +823,7 @@ function EntryView({ employees, entries, upsertEntry, manualLocks, showToast, on
 }
 
 /* ---------- owner view ---------- */
-function OwnerView({ employees, entries, manualLocks, toggleLock, persistEmployees, persistEntries, showToast }) {
+function OwnerView({ employees, entries, manualLocks, toggleLock, persistEmployees, deleteEntry, showToast }) {
   const [sub, setSub] = useState("rollup");
   return (
     <>
@@ -704,7 +834,7 @@ function OwnerView({ employees, entries, manualLocks, toggleLock, persistEmploye
       </div>
       {sub==="rollup"  && <Rollup employees={employees} entries={entries} manualLocks={manualLocks} toggleLock={toggleLock} showToast={showToast} />}
       {sub==="rates"   && <Rates employees={employees} persistEmployees={persistEmployees} showToast={showToast} />}
-      {sub==="entries" && <AllEntries employees={employees} entries={entries} persistEntries={persistEntries} showToast={showToast} />}
+      {sub==="entries" && <AllEntries employees={employees} entries={entries} deleteEntry={deleteEntry} showToast={showToast} />}
     </>
   );
 }
@@ -1103,12 +1233,12 @@ function Rates({ employees, persistEmployees, showToast }) {
 }
 
 /* ---------- all entries (audit / delete) ---------- */
-function AllEntries({ employees, entries, persistEntries, showToast }) {
+function AllEntries({ employees, entries, deleteEntry, showToast }) {
   const nameOf = id => (employees.find(e=>e.id===id)||{}).name || "—";
   const sorted = [...entries].sort((a,b)=> b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
 
-  const del = async (id) => {
-    await persistEntries(entries.filter(e=>e.id!==id));
+  const del = async (entry) => {
+    await deleteEntry(entry);
     showToast("Entry deleted");
   };
 
@@ -1133,12 +1263,12 @@ function AllEntries({ employees, entries, persistEntries, showToast }) {
             {sorted.map(e => {
               const emp = employees.find(x=>x.id===e.empId);
               return (
-                <tr key={e.id}>
+                <tr key={(e._uid||"")+e.id}>
                   <td style={{whiteSpace:"nowrap"}}>{e.date}</td>
                   <td>{nameOf(e.empId)}</td>
                   <td style={{color:"var(--muted)"}}>{summarize(e)}</td>
                   <td className="num pay">{money(payForEntry(emp, e))}</td>
-                  <td style={{textAlign:"right"}}><button className="btn btn-danger" style={{padding:"5px 12px"}} onClick={()=>del(e.id)}>Delete</button></td>
+                  <td style={{textAlign:"right"}}><button className="btn btn-danger" style={{padding:"5px 12px"}} onClick={()=>del(e)}>Delete</button></td>
                 </tr>
               );
             })}
