@@ -1463,6 +1463,9 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setOpenIds(s => new Set(s).add(id));   // a freshly added employee starts expanded
   };
   const removeEmp = (id) => {
+    const emp = draft.find(e => e.id === id);
+    const who = (emp && emp.name && emp.name.trim()) || "this person";
+    if (!window.confirm("Remove " + who + " from the roster?\n\nThey'll be taken off the staff list and can no longer log in. Their past entries stay in the roll-up. You can re-add them later.")) return;
     setDraft(draft.filter(e=>e.id!==id)); markDirty();
   };
   const setRate = (id, key, val) => {
