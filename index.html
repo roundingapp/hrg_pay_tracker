@@ -257,6 +257,8 @@ const qtyRound = (key, v) => isDecimal(key) ? Math.round(v*100)/100 : Math.round
 // per-day caps on how much of a pay type can be logged (undefined = uncapped)
 const QTY_MAX = { perdiem: 1, clinic_hr: 8, virtual_hr: 8, hosp_hr: 12 };
 const capQty = (key, v) => QTY_MAX[key] != null ? Math.min(QTY_MAX[key], v) : v;
+// merge owner-only salaries {empId:annual} into a roster draft as an editable annualSalary field
+const mergeSalaryDraft = (emps, sal) => emps.map(e => ({ ...e, annualSalary: (sal && sal[e.id] != null) ? String(sal[e.id]) : "" }));
 const normU = s => String(s||"").trim().toLowerCase();
 // sort key by last name, ignoring trailing credentials (NP, MD, …); first name as tiebreak
 const CRED_SUFFIX = new Set(["np","md","do","pa","rn","aprn","fnp","dnp","crna","pac","pa-c","msn","apn","facp"]);
@@ -390,11 +392,31 @@ async function loadAllEntries() {
     const snap = await window._fs.getDocs(window._fs.collection(window._db, "paytracker_entries"));
     const all = [];
     snap.forEach(d => {
+      if (d.id === SALARY_DOC) return;   // the salaries doc lives here too — skip it
       const v = (d.data() && d.data().value) || [];
       v.forEach(e => all.push({ ...e, _uid: d.id }));
     });
     return all;
   } catch (e) { console.error("all-entries read failed", e); return []; }
+}
+// Annual salaries (owner-only): stored at paytracker_entries/<SALARY_DOC>. The existing rule on
+// that collection is `isOwner() || auth.uid == docId` — and no staff account's uid can equal the
+// literal "salaries", so this doc is owner-only with no rules change. Shape: { value: {empId: annual} }.
+const SALARY_DOC = "salaries";
+async function loadSalaries() {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", SALARY_DOC);
+    const snap = await window._fs.getDoc(ref);
+    if (snap.exists() && snap.data() && snap.data().value) return snap.data().value;
+    return {};
+  } catch (e) { return {}; }
+}
+async function saveSalaries(map) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", SALARY_DOC);
+    await window._fs.setDoc(ref, { value: map });
+    return true;
+  } catch (e) { console.error("salaries write failed", e); return false; }
 }
 
 /* ---------- public roster of valid usernames (collection "public", doc "usernames") ----------
@@ -476,6 +498,7 @@ function App() {
   const [employees, setEmployees] = useState([]); // {id,name,rates:{}}
   const [entries, setEntries] = useState([]);     // owner: everyone's (tagged _uid); NP: just theirs
   const [certs, setCerts] = useState({});         // NP's per-period cap certifications {periodIdx:{cap,at}}
+  const [salaries, setSalaries] = useState({});   // owner-only annual salaries {empId: annual}
   const [manualLocks, setManualLocks] = useState([]);
   const [toast, setToast] = useState("");
 
@@ -504,6 +527,7 @@ function App() {
     setManualLocks(Array.isArray(locks) ? locks : []);
     setEntries(isOwnerUser(u) ? await loadAllEntries() : await loadEntriesForUid(u.uid));
     setCerts(isOwnerUser(u) ? {} : await loadCertsForUid(u.uid));
+    setSalaries(isOwnerUser(u) ? await loadSalaries() : {});
   }, []);
 
   // watch auth state; (re)load data whenever the signed-in user changes
@@ -529,6 +553,10 @@ function App() {
     // keep the public roster (usernames + username→email directory) in sync so removed
     // staff can't sign in and so logins can resolve usernames/emails
     await savePublicRoster(next);
+  }, []);
+  const persistSalaries = useCallback(async (map) => {
+    setSalaries(map);
+    await saveSalaries(map);
   }, []);
   const toggleLock = useCallback(async (periodIndex) => {
     const latest = await sGet("manualLocks", []);
@@ -595,8 +623,8 @@ function App() {
 
       {/* signed in as owner → full panel */}
       {isOwner && (
-        <OwnerView employees={employees} entries={entries} manualLocks={manualLocks} toggleLock={toggleLock}
-          persistEmployees={persistEmployees} deleteEntry={deleteOwnerEntry} showToast={showToast} />
+        <OwnerView employees={employees} entries={entries} salaries={salaries} manualLocks={manualLocks} toggleLock={toggleLock}
+          persistEmployees={persistEmployees} persistSalaries={persistSalaries} deleteEntry={deleteOwnerEntry} showToast={showToast} />
       )}
 
       {/* signed in as staff/manager → scoped entry screen */}
@@ -1050,7 +1078,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
 }
 
 /* ---------- owner view ---------- */
-function OwnerView({ employees, entries, manualLocks, toggleLock, persistEmployees, deleteEntry, showToast }) {
+function OwnerView({ employees, entries, salaries, manualLocks, toggleLock, persistEmployees, persistSalaries, deleteEntry, showToast }) {
   const [sub, setSub] = useState("rollup");
   return (
     <>
@@ -1059,8 +1087,8 @@ function OwnerView({ employees, entries, manualLocks, toggleLock, persistEmploye
         <button className={"tab"+(sub==="rates"?" active":"")} onClick={()=>setSub("rates")}>Employees &amp; rates</button>
         <button className={"tab"+(sub==="entries"?" active":"")} onClick={()=>setSub("entries")}>All entries</button>
       </div>
-      {sub==="rollup"  && <Rollup employees={employees} entries={entries} manualLocks={manualLocks} toggleLock={toggleLock} showToast={showToast} />}
-      {sub==="rates"   && <Rates employees={employees} persistEmployees={persistEmployees} showToast={showToast} />}
+      {sub==="rollup"  && <Rollup employees={employees} entries={entries} salaries={salaries} manualLocks={manualLocks} toggleLock={toggleLock} showToast={showToast} />}
+      {sub==="rates"   && <Rates employees={employees} salaries={salaries} persistEmployees={persistEmployees} persistSalaries={persistSalaries} showToast={showToast} />}
       {sub==="entries" && <AllEntries employees={employees} entries={entries} deleteEntry={deleteEntry} showToast={showToast} />}
     </>
   );
@@ -1080,7 +1108,7 @@ function payForEntry(emp, entry) {
   return total;
 }
 
-function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
+function Rollup({ employees, entries, salaries, manualLocks, toggleLock, showToast }) {
   const periods = periodList(10, 2);                 // selectable window
   const [mode, setMode] = useState("period");        // "period" | "day" | "custom"
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
@@ -1113,19 +1141,22 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
 
   const buildRow = (emp, empEntries, removed) => {
     const counts = {};
-    let pay = 0;
+    let variable = 0;   // pay from what was logged in the app
     let otherAmt = 0;
     const otherNotes = [];
     for (const t of ALL_TYPES) counts[t.key] = 0;
     for (const e of empEntries) {
       for (const t of ALL_TYPES) counts[t.key] += Number(e.counts?.[t.key]||0);
-      pay += payForEntry(removed ? null : emp, e);   // removed staff: fixed + Other still count; their variable rates are gone
+      variable += payForEntry(removed ? null : emp, e);   // removed staff: fixed + Other still count; their variable rates are gone
       const ov = Number(e.other?.amount);
       if (ov > 0) { otherAmt += ov; otherNotes.push({ date: e.date, amount: ov, note: (e.other.note || "").trim() }); }
     }
-    return { emp, counts, pay, n: empEntries.length, otherAmt, otherNotes, removed };
+    // Base = biweekly salary (annual ÷ 26), only meaningful in the Pay-period view
+    const annual = Number((salaries && salaries[emp.id]) || 0);
+    const base = (mode === "period" && annual > 0) ? annual / 26 : 0;
+    return { emp, counts, base, variable, pay: base + variable, n: empEntries.length, otherAmt, otherNotes, removed };
   };
-  const rows = employees.filter(emp => !emp.isManager).map(emp => buildRow(emp, filtered.filter(e => e.empId === emp.id), false));
+  const rows = employees.map(emp => buildRow(emp, filtered.filter(e => e.empId === emp.id), false));
   // include entries from staff who have since been removed (orphaned but still recorded/owed)
   const currentIds = new Set(employees.map(e => e.id));
   const orphanGroups = {};
@@ -1135,13 +1166,15 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
   });
 
   const grand = rows.reduce((s,r)=>s+r.pay,0);
+  const totalBase = rows.reduce((s,r)=>s+r.base,0);
+  const totalVariable = rows.reduce((s,r)=>s+r.variable,0);
   const totalConsults = rows.reduce((s,r)=>s+r.counts.consults,0);
   const totalFollow = rows.reduce((s,r)=>s+r.counts.followups,0);
   const totalOther = rows.reduce((s,r)=>s+r.otherAmt,0);
 
   // sortable roll-up table: click a header to sort (asc → desc → back to roster order)
   const sortVal = (r, k) => k==="name" ? lastNameKey(r.emp.name)
-    : k==="pay" ? r.pay : k==="other" ? r.otherAmt : (r.counts[k]||0);
+    : k==="pay" ? r.pay : k==="base" ? r.base : k==="variable" ? r.variable : k==="other" ? r.otherAmt : (r.counts[k]||0);
   const sortedRows = sortKey
     ? [...rows].sort((a,b) => { const va=sortVal(a,sortKey), vb=sortVal(b,sortKey);
         const cmp = typeof va==="string" ? va.localeCompare(vb) : (va-vb); return sortDir==="asc"?cmp:-cmp; })
@@ -1308,6 +1341,7 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
             <tr>
               {sortTh("name", "Employee")}
               {sortTh("pay", "Pay", true)}
+              {sortTh("base", "Base", true)}{sortTh("variable", "Variable", true)}
               {sortTh("consults", "Cons", true)}{sortTh("followups", "F/U", true)}
               {sortTh("clinic_pts", "Clinic pts", true)}
               {sortTh("perdiem", "Per diem", true)}{sortTh("pernote", "Notes", true)}
@@ -1320,6 +1354,8 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
               <tr key={r.emp.id}>
                 <td>{r.emp.name}</td>
                 <td className="num pay">{money(r.pay)}</td>
+                <td className="num">{r.base ? money(r.base) : ""}</td>
+                <td className="num">{r.variable ? money(r.variable) : ""}</td>
                 <td className="num">{r.counts.consults||""}</td>
                 <td className="num">{r.counts.followups||""}</td>
                 <td className="num">{r.counts.clinic_pts||""}</td>
@@ -1334,6 +1370,8 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
             <tr className="total-row">
               <td>Total</td>
               <td className="num pay">{money(grand)}</td>
+              <td className="num">{totalBase ? money(totalBase) : ""}</td>
+              <td className="num">{totalVariable ? money(totalVariable) : ""}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.consults,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.followups,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.clinic_pts,0)}</td>
@@ -1378,8 +1416,10 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
 }
 
 /* ---------- employees & rates ---------- */
-function Rates({ employees, persistEmployees, showToast }) {
-  const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(employees)));
+function Rates({ employees, salaries, persistEmployees, persistSalaries, showToast }) {
+  const [draft, setDraft] = useState(() => mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salaries));
+  const salariesRef = useRef(salaries);
+  useEffect(() => { salariesRef.current = salaries; }, [salaries]);
   const [newName, setNewName] = useState("");
   const [openIds, setOpenIds] = useState(() => new Set());   // expanded employee rows; default collapsed
   const [dirty, setDirty] = useState(false);     // unsaved local changes? drives the Save button
@@ -1392,7 +1432,7 @@ function Rates({ employees, persistEmployees, showToast }) {
 
   useEffect(() => { draftRef.current = draft; }, [draft]);
   // pull in saved data, but never clobber unsaved local edits (e.g. on a background refresh)
-  useEffect(() => { if (!dirtyR.current) setDraft(JSON.parse(JSON.stringify(employees))); }, [employees]);
+  useEffect(() => { if (!dirtyR.current) setDraft(mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salariesRef.current)); }, [employees, salaries]);
 
   // drag-to-reorder the roster (touch + mouse) via SortableJS — auto-saves the new order
   useEffect(() => {
@@ -1459,6 +1499,15 @@ function Rates({ employees, persistEmployees, showToast }) {
     setDraft(draft.map(e => e.id===id ? {...e, managedBy: val} : e));
     markDirty();
   };
+  const setSalary = (id, val) => {
+    if (val !== "" && !/^\d*$/.test(val)) return;   // whole dollars
+    setDraft(draft.map(e => e.id===id ? {...e, annualSalary: val} : e));
+    markDirty();
+  };
+  const setSalaryOnly = (id, val) => {
+    setDraft(draft.map(e => e.id===id ? {...e, salaryOnly: val, isManager: val ? false : e.isManager, managedBy: "", fixedEligible: val ? false : e.fixedEligible} : e));
+    markDirty();
+  };
   const toggleOpen = (id) => setOpenIds(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const expandAll = () => setOpenIds(new Set(draft.map(e=>e.id)));
   const collapseAll = () => setOpenIds(new Set());
@@ -1467,44 +1516,54 @@ function Rates({ employees, persistEmployees, showToast }) {
     const u = normU(emp.username);
     const nRates = VARIABLE.filter(t => Number(emp.rates?.[t.key]) > 0).length;
     const bits = [];
-    if (emp.isManager) { bits.push("office manager"); }
+    if (emp.salaryOnly) { bits.push("salary only"); }
+    else if (emp.isManager) { bits.push("office manager"); }
     else {
       if (emp.fixedEligible) bits.push("consults+FU");
       if (nRates) bits.push(nRates + " rate" + (nRates===1?"":"s"));
       if (Number(emp.patientCap) > 0) bits.push("cap " + Math.round(Number(emp.patientCap)));
       if (emp.managedBy) bits.push("manager-entered");
     }
-    return { user: u ? "@"+u : "needs username", right: bits.length ? bits.join(" · ") : "no pay set", warn: !u };
+    if (Number(emp.annualSalary) > 0) bits.push("$" + Math.round(Number(emp.annualSalary)/1000) + "k");
+    const noLogin = emp.salaryOnly;
+    return { user: noLogin ? "no login" : (u ? "@"+u : "needs username"), right: bits.length ? bits.join(" · ") : "no pay set", warn: !noLogin && !u };
   };
   // validate the roster → {clean} or {error}
   const buildClean = (source) => {
     const named = source.filter(e => e.name.trim());
-    const missing = named.find(e => !normU(e.username));
-    if (missing) return { error: "Add a username for " + missing.name.trim() + " to save" };
+    // username required for everyone who logs in (salary-only people don't)
+    const missing = named.find(e => !e.salaryOnly && !normU(e.username));
+    if (missing) return { error: "Add a username for " + missing.name.trim() + " (or mark them salary-only)" };
     const seen = {};
-    for (const e of named) { const u = normU(e.username); if (seen[u]) return { error: 'Username "'+u+'" is used twice — make it unique' }; seen[u] = true; }
+    for (const e of named) { const u = normU(e.username); if (!u) continue; if (seen[u]) return { error: 'Username "'+u+'" is used twice — make it unique' }; seen[u] = true; }
     const seenE = {};
     for (const e of named) { const em = String(e.email||"").trim().toLowerCase(); if (!em) continue; if (seenE[em]) return { error: 'Email "'+em+'" is used by two people — make it unique' }; seenE[em] = true; }
+    const salariesMap = {};
     const clean = named.map(e => {
       const rates = {};
       for (const t of VARIABLE) { const v = e.rates?.[t.key]; if (v !== "" && v != null && !isNaN(Number(v)) && Number(v) > 0) rates[t.key] = Number(v); }
       const out = { ...e, name: e.name.trim(), username: normU(e.username), email: String(e.email||"").trim().toLowerCase(), rates, fixedEligible: !!e.fixedEligible };
+      const annual = Number(e.annualSalary);
+      if (annual > 0) salariesMap[e.id] = Math.round(annual);   // → owner-only salaries doc
+      delete out.annualSalary;                                  // never store the amount in the employees record
+      if (e.salaryOnly) { out.salaryOnly = true; out.username = ""; out.email = ""; out.fixedEligible = false; out.rates = {}; delete out.managedBy; delete out.isManager; }
+      else delete out.salaryOnly;
       const cap = Number(e.patientCap);
-      if (cap > 0 && !e.isManager) out.patientCap = Math.round(cap); else delete out.patientCap;
-      if (e.isManager) { out.isManager = true; delete out.managedBy; } else { delete out.isManager; if (e.managedBy) out.managedBy = String(e.managedBy); else delete out.managedBy; }
+      if (cap > 0 && !e.isManager && !e.salaryOnly) out.patientCap = Math.round(cap); else delete out.patientCap;
+      if (out.isManager) { delete out.managedBy; } else if (!e.salaryOnly) { if (e.managedBy) out.managedBy = String(e.managedBy); else delete out.managedBy; }
       return out;
     });
-    return { clean };
+    return { clean, salaries: salariesMap };
   };
-  const persistClean = async (clean) => { setSaving(true); markClean(); await persistEmployees(clean); setSaving(false); };
+  const persistClean = async (clean, salariesMap) => { setSaving(true); markClean(); await persistEmployees(clean); await persistSalaries(salariesMap); setSaving(false); };
   const save = async (sourceArr) => {        // explicit/manual (surfaces validation errors)
     const r = buildClean(sourceArr || draftRef.current);
     if (r.error) { showToast(r.error); return; }
-    await persistClean(r.clean);
+    await persistClean(r.clean, r.salaries);
   };
   const autoSave = async () => {             // quiet; waits silently until valid
     const r = buildClean(draftRef.current);
-    if (!r.error) await persistClean(r.clean);
+    if (!r.error) await persistClean(r.clean, r.salaries);
   };
   // debounced auto-save: persist shortly after the last edit
   useEffect(() => {
@@ -1556,6 +1615,27 @@ function Rates({ employees, persistEmployees, showToast }) {
                 <input type="text" value={emp.name} onChange={e=>setName(emp.id, e.target.value)}
                   style={{maxWidth:260, fontWeight:600}} />
               </div>
+              <div style={{marginBottom:14}}>
+                <label>Annual salary (W2 base — shown as biweekly in the roll-up)</label>
+                <input type="text" inputMode="numeric" value={emp.annualSalary ?? ""} placeholder="none"
+                  onChange={e=>setSalary(emp.id, e.target.value)} style={{maxWidth:180}} />
+                {Number(emp.annualSalary) > 0 && (
+                  <div className="fixed-note" style={{marginTop:4}}>Biweekly (÷26): <strong>{money(Number(emp.annualSalary)/26)}</strong></div>
+                )}
+              </div>
+              <div style={{marginBottom:14}}>
+                <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
+                  <input type="checkbox" style={{width:"auto", margin:0}}
+                    checked={!!emp.salaryOnly}
+                    onChange={e=>setSalaryOnly(emp.id, e.target.checked)} />
+                  <span style={{color:"var(--ink)", fontWeight:500}}>Salary only — no app login (payroll shows their Base only)</span>
+                </label>
+                <div className="fixed-note" style={{marginLeft:28, marginTop:4}}>
+                  For owners or staff who don't log anything — they show in the roll-up with their Base, nothing else.
+                </div>
+              </div>
+              {!emp.salaryOnly && (
+              <>
               <div style={{marginBottom:14}}>
                 <label>Username (what they type to log in)</label>
                 <input type="text" value={emp.username ?? ""} autoComplete="off"
@@ -1637,6 +1717,7 @@ function Rates({ employees, persistEmployees, showToast }) {
               </div>
               </>
               )}
+              </>)}
             </>
           )}
         </div>
