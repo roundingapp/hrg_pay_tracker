@@ -1157,8 +1157,8 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
         <table>
           <thead>
             <tr>
-              {sortTh("pay", "Pay", true)}
               {sortTh("name", "Employee")}
+              {sortTh("pay", "Pay", true)}
               {sortTh("consults", "Cons", true)}{sortTh("followups", "F/U", true)}
               {sortTh("clinic_pts", "Clinic pts", true)}
               {sortTh("perdiem", "Per diem", true)}{sortTh("pernote", "Notes", true)}
@@ -1169,8 +1169,8 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
           <tbody>
             {sortedRows.map(r => (
               <tr key={r.emp.id}>
-                <td className="num pay">{money(r.pay)}</td>
                 <td>{r.emp.name}</td>
+                <td className="num pay">{money(r.pay)}</td>
                 <td className="num">{r.counts.consults||""}</td>
                 <td className="num">{r.counts.followups||""}</td>
                 <td className="num">{r.counts.clinic_pts||""}</td>
@@ -1183,8 +1183,8 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
               </tr>
             ))}
             <tr className="total-row">
-              <td className="num pay">{money(grand)}</td>
               <td>Total</td>
+              <td className="num pay">{money(grand)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.consults,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.followups,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.clinic_pts,0)}</td>
