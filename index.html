@@ -172,6 +172,12 @@
   @media (max-width:600px){ .day-cell{ min-height:52px; padding:6px 2px; gap:2px; } .day-cell .dnum{font-size:13px;} .day-cell .damt,.day-cell .dempty{font-size:11px;} .week-grid{gap:4px;} }
   .other-box { border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; background:#fcfbf8; }
   .other-fields { display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; }
+  .cap-gate { margin-top:18px; border:1px solid var(--amber); background:#fdf6e3; border-radius:var(--radius); padding:16px 18px; }
+  .cap-gate-title { font-weight:700; color:#8a6d00; margin-bottom:6px; }
+  .cap-gate-body { font-size:14px; color:var(--ink); line-height:1.5; margin-bottom:14px; }
+  .cap-gate-check { display:flex; align-items:flex-start; gap:10px; cursor:pointer; margin-bottom:0; }
+  .cap-gate-check input { width:auto; margin:2px 0 0; flex:0 0 auto; }
+  .cap-gate-check span { color:var(--ink); font-weight:500; }
 </style>
 </head>
 <body>
@@ -357,9 +363,25 @@ async function loadEntriesForUid(uid) {
 async function saveEntriesForUid(uid, val) {
   try {
     const ref = window._fs.doc(window._db, "paytracker_entries", uid);
-    await window._fs.setDoc(ref, { value: val });
+    await window._fs.setDoc(ref, { value: val }, { merge: true });   // merge so per-period cap certs aren't wiped
     return true;
   } catch (e) { console.error("entries write failed", e); return false; }
+}
+// per-NP, per-period cap certifications, stored alongside the NP's entries: { "<periodIdx>": {cap, at} }
+async function loadCertsForUid(uid) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", uid);
+    const snap = await window._fs.getDoc(ref);
+    if (snap.exists() && snap.data() && snap.data().certs) return snap.data().certs;
+    return {};
+  } catch (e) { return {}; }
+}
+async function saveCertForUid(uid, periodIdx, cap, atISO) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", uid);
+    await window._fs.setDoc(ref, { certs: { [String(periodIdx)]: { cap, at: atISO } } }, { merge: true });
+    return true;
+  } catch (e) { console.error("cert write failed", e); return false; }
 }
 // owner-only: merge every NP's entries, tagging each with the uid doc it came from
 async function loadAllEntries() {
@@ -400,6 +422,7 @@ function App() {
   const [tab, setTab] = useState("entry");
   const [employees, setEmployees] = useState([]); // {id,name,rates:{}}
   const [entries, setEntries] = useState([]);     // owner: everyone's (tagged _uid); NP: just theirs
+  const [certs, setCerts] = useState({});         // NP's per-period cap certifications {periodIdx:{cap,at}}
   const [manualLocks, setManualLocks] = useState([]);
   const [toast, setToast] = useState("");
 
@@ -424,6 +447,7 @@ function App() {
     setEmployees(emps && emps.length ? emps : []);
     setManualLocks(Array.isArray(locks) ? locks : []);
     setEntries(isOwnerUser(u) ? await loadAllEntries() : await loadEntriesForUid(u.uid));
+    setCerts(isOwnerUser(u) ? {} : await loadCertsForUid(u.uid));
   }, []);
 
   // watch auth state; (re)load data whenever the signed-in user changes
@@ -472,6 +496,14 @@ function App() {
     return hasAny;
   }, [uid]);
 
+  // capped NP certifies they've met their cap for a given pay period (records the cap value + time)
+  const certifyPeriod = useCallback(async (periodIdx, cap) => {
+    if (!uid) return;
+    const at = new Date().toISOString();
+    setCerts(c => ({ ...c, [String(periodIdx)]: { cap, at } }));
+    await saveCertForUid(uid, periodIdx, cap, at);
+  }, [uid]);
+
   // owner deletes an entry from whichever NP doc it came from (tagged _uid on merge)
   const deleteOwnerEntry = useCallback(async (entry) => {
     if (!entry || !entry._uid) return;
@@ -513,7 +545,7 @@ function App() {
       {/* signed in as NP → only their own entry screen */}
       {authUser && !isOwner && (
         myEmp
-          ? <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast} />
+          ? <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} showToast={showToast} />
           : <div className="card"><div className="empty">You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees &amp; rates, then sign out and back in.</div></div>
       )}
 
@@ -662,7 +694,7 @@ function OwnerLogin({ showToast }) {
 }
 
 /* ---------- entry view ---------- */
-function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
+function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast }) {
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
@@ -688,6 +720,14 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
   const dayEntries = (iso) => (emp ? entries.filter(e => e.empId === emp.id && e.date === iso) : []);
   const dayDollars = (iso) => dayEntries(iso).reduce((s,e) => s + payForEntry(emp, e), 0);
   const periodDollars = periodDays.reduce((s,iso) => s + dayDollars(iso), 0);
+
+  // patient-cap certification: capped NPs must certify once per pay period before logging.
+  // The cert records the cap value it was signed at, so changing the cap re-prompts.
+  const cap = Number(emp && emp.patientCap) || 0;
+  const capped = cap > 0;
+  const cert = certs && certs[String(periodIdx)];
+  const certifiedForPeriod = !capped || (cert && Number(cert.cap) === cap);
+  const periodLabel = fmtShortYr(period.start) + " – " + fmtShortYr(period.end);
 
   // when navigating to another period, pull the selected day into that period
   useEffect(() => {
@@ -814,7 +854,25 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
         </>
       )}
 
-      {emp && visibleTypes.length > 0 && (
+      {emp && capped && !certifiedForPeriod && (
+        <div className="cap-gate">
+          <div className="cap-gate-title">⚠ Salary cap</div>
+          <div className="cap-gate-body">
+            Your salary covers your first <strong>{cap}</strong> patients this pay period ({periodLabel}). Only log <strong>additional</strong> consults / follow-ups here.
+          </div>
+          <label className="cap-gate-check">
+            <input type="checkbox" checked={false} onChange={()=>certifyPeriod(periodIdx, cap)} />
+            <span>I certify I've met my {cap}-patient cap this period and these are additional patients.</span>
+          </label>
+        </div>
+      )}
+      {emp && capped && certifiedForPeriod && (
+        <div className="fixed-note" style={{marginTop:14, color:"var(--accent-ink)"}}>
+          ✓ Certified for {periodLabel} — logging additional patients.
+        </div>
+      )}
+
+      {emp && certifiedForPeriod && visibleTypes.length > 0 && (
         <>
           <div style={{height:18}} />
           <label style={{marginBottom:10}}>
@@ -845,13 +903,13 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
         </>
       )}
 
-      {emp && visibleTypes.length === 0 && (
+      {emp && certifiedForPeriod && visibleTypes.length === 0 && (
         <div className="fixed-note" style={{marginTop:18}}>
           No counted pay types are set up for {emp.name} yet — you can still log an Other amount below, or ask the owner to set your rates.
         </div>
       )}
 
-      {emp && (
+      {emp && certifiedForPeriod && (
         <>
           <div style={{height:18}} />
           <div className="other-box">
@@ -1292,6 +1350,15 @@ function Rates({ employees, persistEmployees, showToast }) {
     setDraft(draft.map(e => e.id===id ? {...e, fixedEligible: val} : e));
     markDirty();
   };
+  const setEmail = (id, val) => {
+    setDraft(draft.map(e => e.id===id ? {...e, email: val} : e));
+    markDirty();
+  };
+  const setCap = (id, val) => {
+    if (val !== "" && !/^\d*$/.test(val)) return;   // whole numbers only
+    setDraft(draft.map(e => e.id===id ? {...e, patientCap: val} : e));
+    markDirty();
+  };
   const toggleOpen = (id) => setOpenIds(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const expandAll = () => setOpenIds(new Set(draft.map(e=>e.id)));
   const collapseAll = () => setOpenIds(new Set());
@@ -1302,6 +1369,7 @@ function Rates({ employees, persistEmployees, showToast }) {
     const bits = [];
     if (emp.fixedEligible) bits.push("consults+FU");
     if (nRates) bits.push(nRates + " rate" + (nRates===1?"":"s"));
+    if (Number(emp.patientCap) > 0) bits.push("cap " + Math.round(Number(emp.patientCap)));
     return { user: u ? "@"+u : "needs username", right: bits.length ? bits.join(" · ") : "no pay set", warn: !u };
   };
   // validate the roster → {clean} or {error}
@@ -1314,7 +1382,10 @@ function Rates({ employees, persistEmployees, showToast }) {
     const clean = named.map(e => {
       const rates = {};
       for (const t of VARIABLE) { const v = e.rates?.[t.key]; if (v !== "" && v != null && !isNaN(Number(v)) && Number(v) > 0) rates[t.key] = Number(v); }
-      return { ...e, name: e.name.trim(), username: normU(e.username), rates, fixedEligible: !!e.fixedEligible };
+      const out = { ...e, name: e.name.trim(), username: normU(e.username), email: String(e.email||"").trim().toLowerCase(), rates, fixedEligible: !!e.fixedEligible };
+      const cap = Number(e.patientCap);
+      if (cap > 0) out.patientCap = Math.round(cap); else delete out.patientCap;
+      return out;
     });
     return { clean };
   };
@@ -1388,6 +1459,13 @@ function Rates({ employees, persistEmployees, showToast }) {
                   <div className="fixed-note" style={{color:"var(--danger)", marginTop:4}}>Duplicate — this username is used by someone else.</div>
                 )}
               </div>
+              <div style={{marginBottom:14}}>
+                <label>Email (for login &amp; password reset)</label>
+                <input type="email" value={emp.email ?? ""} autoComplete="off"
+                  placeholder="name@houstonrenal.com"
+                  onChange={e=>setEmail(emp.id, e.target.value)}
+                  style={{maxWidth:300}} />
+              </div>
               <div style={{marginBottom:14, paddingBottom:14, borderBottom:"1px solid var(--line)"}}>
                 <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
                   <input type="checkbox" style={{width:"auto", margin:0}}
@@ -1410,6 +1488,16 @@ function Rates({ employees, persistEmployees, showToast }) {
                       onChange={e=>setRate(emp.id, t.key, e.target.value)} />
                   </div>
                 ))}
+              </div>
+              <div style={{marginTop:14, paddingTop:14, borderTop:"1px solid var(--line)"}}>
+                <label>Patient cap (covered by salary)</label>
+                <input type="text" inputMode="numeric" value={emp.patientCap ?? ""}
+                  placeholder="none"
+                  onChange={e=>setCap(emp.id, e.target.value)}
+                  style={{maxWidth:140}} />
+                <div className="fixed-note" style={{marginTop:4}}>
+                  Set a number (e.g. 50) for salaried staff whose first N patients are covered. They certify once each pay period before logging extras; changing the number makes them re-certify. Leave blank for no cap.
+                </div>
               </div>
             </>
           )}
