@@ -908,8 +908,7 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
     return true;
   });
 
-  const rows = employees.map(emp => {
-    const empEntries = filtered.filter(e => e.empId === emp.id);
+  const buildRow = (emp, empEntries, removed) => {
     const counts = {};
     let pay = 0;
     let otherAmt = 0;
@@ -917,11 +916,19 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
     for (const t of ALL_TYPES) counts[t.key] = 0;
     for (const e of empEntries) {
       for (const t of ALL_TYPES) counts[t.key] += Number(e.counts?.[t.key]||0);
-      pay += payForEntry(emp, e);
+      pay += payForEntry(removed ? null : emp, e);   // removed staff: fixed + Other still count; their variable rates are gone
       const ov = Number(e.other?.amount);
       if (ov > 0) { otherAmt += ov; otherNotes.push({ date: e.date, amount: ov, note: (e.other.note || "").trim() }); }
     }
-    return { emp, counts, pay, n: empEntries.length, otherAmt, otherNotes };
+    return { emp, counts, pay, n: empEntries.length, otherAmt, otherNotes, removed };
+  };
+  const rows = employees.map(emp => buildRow(emp, filtered.filter(e => e.empId === emp.id), false));
+  // include entries from staff who have since been removed (orphaned but still recorded/owed)
+  const currentIds = new Set(employees.map(e => e.id));
+  const orphanGroups = {};
+  filtered.forEach(e => { if (!currentIds.has(e.empId)) (orphanGroups[e.empId] = orphanGroups[e.empId] || []).push(e); });
+  Object.entries(orphanGroups).forEach(([id, es]) => {
+    rows.push(buildRow({ id, name: ((es[0] && es[0].username) || id) + " (removed)" }, es, true));
   });
 
   const grand = rows.reduce((s,r)=>s+r.pay,0);
@@ -1310,7 +1317,7 @@ function Rates({ employees, persistEmployees, showToast }) {
 
 /* ---------- all entries (audit / delete) ---------- */
 function AllEntries({ employees, entries, deleteEntry, showToast }) {
-  const nameOf = id => (employees.find(e=>e.id===id)||{}).name || "—";
+  const nameOf = e => { const m = employees.find(x=>x.id===e.empId); return m ? m.name : (e.username ? e.username + " (removed)" : "—"); };
   const sorted = [...entries].sort((a,b)=> b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
 
   const del = async (entry) => {
@@ -1341,7 +1348,7 @@ function AllEntries({ employees, entries, deleteEntry, showToast }) {
               return (
                 <tr key={(e._uid||"")+e.id}>
                   <td style={{whiteSpace:"nowrap"}}>{e.date}</td>
-                  <td>{nameOf(e.empId)}</td>
+                  <td>{nameOf(e)}</td>
                   <td style={{color:"var(--muted)"}}>{summarize(e)}</td>
                   <td className="num pay">{money(payForEntry(emp, e))}</td>
                   <td style={{textAlign:"right"}}><button className="btn btn-danger" style={{padding:"5px 12px"}} onClick={()=>del(e)}>Delete</button></td>
