@@ -190,7 +190,7 @@
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getFirestore, doc, getDoc, setDoc, collection, getDocs }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-  import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail }
+  import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail, sendPasswordResetEmail }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
   // ↓↓↓↓↓  REPLACE EVERYTHING BETWEEN THE BRACES WITH YOUR OWN CONFIG  ↓↓↓↓↓
@@ -208,7 +208,7 @@
   window._db = getFirestore(app);
   window._fs = { doc, getDoc, setDoc, collection, getDocs };
   window._auth = getAuth(app);
-  window._authfns = { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail };
+  window._authfns = { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail, sendPasswordResetEmail };
   window._firebaseReady = true;
   window.dispatchEvent(new Event("firebase-ready"));
 </script>
@@ -414,6 +414,31 @@ async function savePublicUsernames(list) {
     return true;
   } catch (e) { console.error("usernames write failed", e); return false; }
 }
+// public roster: usernames (for the lockout) + a username→email directory so the login
+// screen can resolve a typed username to its account email, and validate email logins,
+// BEFORE anyone signs in. Emails here are readable without auth (the accepted tradeoff).
+async function savePublicRoster(employees) {
+  const value = [], dir = {};
+  for (const e of employees) {
+    const u = String(e.username||"").trim().toLowerCase();
+    if (!u) continue;
+    value.push(u);
+    dir[u] = String(e.email||"").trim().toLowerCase();   // "" until an email is filled in
+  }
+  try {
+    const ref = window._fs.doc(window._db, "public", "usernames");
+    await window._fs.setDoc(ref, { value, dir });
+    return true;
+  } catch (e) { console.error("roster write failed", e); return false; }
+}
+async function loadPublicRoster() {
+  try {
+    const ref = window._fs.doc(window._db, "public", "usernames");
+    const snap = await window._fs.getDoc(ref);
+    const d = snap.exists() ? snap.data() : null;
+    return { usernames: (d && Array.isArray(d.value)) ? d.value : null, dir: (d && d.dir) || {} };
+  } catch (e) { return { usernames: null, dir: {} }; }   // missing/denied → fail open
+}
 
 /* ---------- app ---------- */
 function App() {
@@ -428,9 +453,12 @@ function App() {
 
   const isOwner = isOwnerUser(authUser);
   const uid = authUser ? authUser.uid : null;
-  // the signed-in NP's own employee record, matched by their internal login email
+  // the signed-in NP's own employee record, matched by their real email or internal login email
   const myEmp = (authUser && !isOwner)
-    ? employees.find(e => npEmailFor(e.username) === String(authUser.email||"").toLowerCase())
+    ? employees.find(e => {
+        const ae = String(authUser.email||"").toLowerCase();
+        return (String(e.email||"").trim().toLowerCase() === ae && ae) || npEmailFor(e.username) === ae;
+      })
     : null;
 
   const showToast = useCallback((msg) => {
@@ -470,8 +498,9 @@ function App() {
   const persistEmployees = useCallback(async (next) => {
     setEmployees(next);
     await sSet("employees", next);
-    // keep the public username allow-list in sync so removed staff can't sign in
-    await savePublicUsernames(next.map(e => String(e.username||"").trim().toLowerCase()).filter(Boolean));
+    // keep the public roster (usernames + username→email directory) in sync so removed
+    // staff can't sign in and so logins can resolve usernames/emails
+    await savePublicRoster(next);
   }, []);
   const toggleLock = useCallback(async (periodIndex) => {
     const latest = await sGet("manualLocks", []);
@@ -569,29 +598,45 @@ function LoginScreen({ showToast }) {
   );
 }
 
-// NP login: enter username → first time sets a password, after that signs in
+// NP login: enter email OR username → first time sets a password, after that signs in.
+// A username resolves to its account email via the public directory (real email if on file,
+// else the legacy internal address). Real emails also enable "forgot password".
 function NPLogin({ showToast }) {
-  const [username, setUsername] = useState("");
+  const [idInput, setIdInput] = useState("");
   const [pw, setPw] = useState("");
   const [stage, setStage] = useState("user");   // "user" | "signin" | "create"
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const email = npEmailFor(username);
+  const [resolvedEmail, setResolvedEmail] = useState("");
+  const [isRealEmail, setIsRealEmail] = useState(false);
+  const [shownId, setShownId] = useState("");    // what they typed, for the welcome header
 
   const checkUser = async (e) => {
     if (e) e.preventDefault();
     setErr("");
-    const u = String(username||"").trim().toLowerCase();
-    if (!u) { setErr("Enter your username."); return; }
+    const raw = String(idInput||"").trim();
+    if (!raw) { setErr("Enter your email or username."); return; }
     setBusy(true);
     try {
-      // hard lockout: only current employees (on the public allow-list) may sign in or set a password
-      const roster = await loadPublicUsernames();
-      if (Array.isArray(roster) && !roster.includes(u)) {
-        setErr("That username isn't set up. Ask the admin to add you.");
-        setBusy(false);
-        return;
+      const { usernames, dir } = await loadPublicRoster();
+      let email = "", real = false;
+      if (raw.includes("@")) {
+        // email login: must match a current employee's email on file
+        const lc = raw.toLowerCase();
+        if (!Object.values(dir).some(v => v === lc)) {
+          setErr("That email isn't set up. Try your username, or ask the admin."); setBusy(false); return;
+        }
+        email = lc; real = true;
+      } else {
+        // username login: hard lockout to current employees, then resolve to the account email
+        const u = raw.toLowerCase();
+        if (Array.isArray(usernames) && !usernames.includes(u)) {
+          setErr("That username isn't set up. Ask the admin to add you."); setBusy(false); return;
+        }
+        const r = dir[u];
+        if (r) { email = r; real = true; } else { email = npEmailFor(u); real = false; }
       }
+      setResolvedEmail(email); setIsRealEmail(real); setShownId(raw);
       const methods = await window._authfns.fetchSignInMethodsForEmail(window._auth, email);
       setStage(methods && methods.length ? "signin" : "create");
     } catch (ex) { setStage("signin"); }
@@ -600,7 +645,7 @@ function NPLogin({ showToast }) {
   const doSignIn = async (e) => {
     if (e) e.preventDefault();
     setErr(""); setBusy(true);
-    try { await window._authfns.signInWithEmailAndPassword(window._auth, email, pw); }
+    try { await window._authfns.signInWithEmailAndPassword(window._auth, resolvedEmail, pw); }
     catch (ex) { setErr("Wrong password. Try again."); }
     finally { setBusy(false); }
   };
@@ -609,8 +654,16 @@ function NPLogin({ showToast }) {
     setErr("");
     if (pw.length < 6) { setErr("Pick a password of at least 6 characters."); return; }
     setBusy(true);
-    try { await window._authfns.createUserWithEmailAndPassword(window._auth, email, pw); showToast("Password set — you're in."); }
-    catch (ex) { setErr(ex && ex.code === "auth/email-already-in-use" ? "That username already has a password — go back and sign in." : "Couldn't set up your login."); }
+    try { await window._authfns.createUserWithEmailAndPassword(window._auth, resolvedEmail, pw); showToast("Password set — you're in."); }
+    catch (ex) { setErr(ex && ex.code === "auth/email-already-in-use" ? "This login already has a password — go back and sign in." : "Couldn't set up your login."); }
+    finally { setBusy(false); }
+  };
+  const doReset = async () => {
+    setErr("");
+    if (!isRealEmail) { setErr("No email is on file for this login yet — ask the admin to reset it."); return; }
+    setBusy(true);
+    try { await window._authfns.sendPasswordResetEmail(window._auth, resolvedEmail); showToast("Reset link sent to " + resolvedEmail); }
+    catch (ex) { setErr("Couldn't send a reset link. Try again or ask the admin."); }
     finally { setBusy(false); }
   };
 
@@ -618,9 +671,9 @@ function NPLogin({ showToast }) {
     return (
       <form onSubmit={checkUser}>
         <h2>Staff Login</h2>
-        <p className="hint">Enter your username. First time? You'll set a password next.</p>
-        <label>Username</label>
-        <input type="text" autoComplete="username" value={username} onChange={e=>setUsername(e.target.value)} placeholder="your username" autoFocus />
+        <p className="hint">Enter your email or username. First time? You'll set a password next.</p>
+        <label>Email or username</label>
+        <input type="text" autoComplete="username" value={idInput} onChange={e=>setIdInput(e.target.value)} placeholder="email or username" autoFocus />
         {err && <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>{err}</div>}
         <div style={{height:14}} />
         <button type="submit" className="btn btn-primary" style={{width:"100%"}} disabled={busy}>{busy?"Checking…":"Continue"}</button>
@@ -630,20 +683,22 @@ function NPLogin({ showToast }) {
   const backBtn = (
     <>
       <div style={{height:8}} />
-      <button type="button" className="btn btn-ghost" style={{width:"100%"}} onClick={()=>{ setStage("user"); setPw(""); setErr(""); }}>Use a different username</button>
+      <button type="button" className="btn btn-ghost" style={{width:"100%"}} onClick={()=>{ setStage("user"); setPw(""); setErr(""); }}>Use a different login</button>
     </>
   );
   if (stage === "signin") {
     return (
       <form onSubmit={doSignIn}>
         <h2>Welcome back</h2>
-        <p className="hint">Signing in as <strong>{npEmailFor(username).split("@")[0]}</strong>.</p>
-        <input type="text" autoComplete="username" value={npEmailFor(username).split("@")[0]} readOnly style={{display:"none"}} />
+        <p className="hint">Signing in as <strong>{shownId}</strong>.</p>
+        <input type="text" autoComplete="username" value={resolvedEmail} readOnly style={{display:"none"}} />
         <label>Password</label>
         <input type="password" autoComplete="current-password" value={pw} onChange={e=>setPw(e.target.value)} autoFocus />
         {err && <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>{err}</div>}
         <div style={{height:14}} />
         <button type="submit" className="btn btn-primary" style={{width:"100%"}} disabled={busy}>{busy?"Signing in…":"Sign in"}</button>
+        <div style={{height:8}} />
+        <button type="button" className="btn btn-ghost" style={{width:"100%", fontSize:13}} onClick={doReset} disabled={busy}>Forgot password?</button>
         {backBtn}
       </form>
     );
@@ -651,8 +706,8 @@ function NPLogin({ showToast }) {
   return (
     <form onSubmit={doCreate}>
       <h2>Set your password</h2>
-      <p className="hint">First time for <strong>{npEmailFor(username).split("@")[0]}</strong>. Choose a password (6+ characters) — your browser can save it.</p>
-      <input type="text" autoComplete="username" value={npEmailFor(username).split("@")[0]} readOnly style={{display:"none"}} />
+      <p className="hint">First time for <strong>{shownId}</strong>. Choose a password (6+ characters) — your browser can save it.</p>
+      <input type="text" autoComplete="username" value={resolvedEmail} readOnly style={{display:"none"}} />
       <label>New password</label>
       <input type="password" autoComplete="new-password" value={pw} onChange={e=>setPw(e.target.value)} autoFocus />
       {err && <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>{err}</div>}
@@ -1379,6 +1434,8 @@ function Rates({ employees, persistEmployees, showToast }) {
     if (missing) return { error: "Add a username for " + missing.name.trim() + " to save" };
     const seen = {};
     for (const e of named) { const u = normU(e.username); if (seen[u]) return { error: 'Username "'+u+'" is used twice — make it unique' }; seen[u] = true; }
+    const seenE = {};
+    for (const e of named) { const em = String(e.email||"").trim().toLowerCase(); if (!em) continue; if (seenE[em]) return { error: 'Email "'+em+'" is used by two people — make it unique' }; seenE[em] = true; }
     const clean = named.map(e => {
       const rates = {};
       for (const t of VARIABLE) { const v = e.rates?.[t.key]; if (v !== "" && v != null && !isNaN(Number(v)) && Number(v) > 0) rates[t.key] = Number(v); }
