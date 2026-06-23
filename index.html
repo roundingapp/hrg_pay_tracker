@@ -4,6 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Pay Tracker</title>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin />
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin />
+<link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
 <style>
   :root {
     --bg: #faf9f6;
@@ -182,7 +186,7 @@
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><div style="max-width:680px;margin:90px auto 0;text-align:center;color:#8a8577;font:500 15px/1.5 -apple-system,Segoe UI,Arial">Loading…</div></div>
 
 <!-- ============================================================= -->
 <!-- ===  STEP 1: PASTE YOUR FIREBASE CONFIG IN THE BOX BELOW  === -->
@@ -220,7 +224,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
 
-<script type="text/babel">
+<script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback, useRef } = React;
 
 /* ---------- config ---------- */
