@@ -178,6 +178,7 @@
   .cap-gate-check { display:flex; align-items:flex-start; gap:10px; cursor:pointer; margin-bottom:0; }
   .cap-gate-check input { width:auto; margin:2px 0 0; flex:0 0 auto; }
   .cap-gate-check span { color:var(--ink); font-weight:500; }
+  .manager-picker { display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; }
 </style>
 </head>
 <body>
@@ -418,16 +419,17 @@ async function savePublicUsernames(list) {
 // screen can resolve a typed username to its account email, and validate email logins,
 // BEFORE anyone signs in. Emails here are readable without auth (the accepted tradeoff).
 async function savePublicRoster(employees) {
-  const value = [], dir = {};
+  const value = [], dir = {}, managed = [];
   for (const e of employees) {
     const u = String(e.username||"").trim().toLowerCase();
     if (!u) continue;
     value.push(u);
     dir[u] = String(e.email||"").trim().toLowerCase();   // "" until an email is filled in
+    if (e.managedBy) managed.push(u);   // entered by a manager → can't self-log in
   }
   try {
     const ref = window._fs.doc(window._db, "public", "usernames");
-    await window._fs.setDoc(ref, { value, dir });
+    await window._fs.setDoc(ref, { value, dir, managed });
     return true;
   } catch (e) { console.error("roster write failed", e); return false; }
 }
@@ -436,11 +438,37 @@ async function loadPublicRoster() {
     const ref = window._fs.doc(window._db, "public", "usernames");
     const snap = await window._fs.getDoc(ref);
     const d = snap.exists() ? snap.data() : null;
-    return { usernames: (d && Array.isArray(d.value)) ? d.value : null, dir: (d && d.dir) || {} };
-  } catch (e) { return { usernames: null, dir: {} }; }   // missing/denied → fail open
+    return { usernames: (d && Array.isArray(d.value)) ? d.value : null, dir: (d && d.dir) || {}, managed: (d && Array.isArray(d.managed)) ? d.managed : [] };
+  } catch (e) { return { usernames: null, dir: {}, managed: [] }; }   // missing/denied → fail open
 }
 
 /* ---------- app ---------- */
+// Office manager: a scoped login that enters hours on behalf of assigned staff (no pay of their own).
+// Reuses EntryView per selected employee; entries live in the manager's own doc, tagged by empId,
+// so they roll up to the owner exactly like self-entry.
+function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, showToast }) {
+  const managed = employees.filter(e => e.managedBy === manager.id);
+  const [selId, setSelId] = useState(() => (managed[0] ? managed[0].id : null));
+  const sel = managed.find(e => e.id === selId) || managed[0] || null;
+  if (!managed.length) {
+    return <div className="card"><div className="empty">No staff are assigned to you yet. Ask the owner to set someone's "Entered by" to your name in Employees &amp; rates.</div></div>;
+  }
+  return (
+    <>
+      <div className="card">
+        <h2 style={{marginTop:0}}>Enter hours for staff</h2>
+        <p className="hint">Pick whose hours you're entering, then fill their days below. Switching keeps each person separate.</p>
+        <div className="manager-picker">
+          {managed.map(e => (
+            <button key={e.id} className={"btn " + (sel && e.id===sel.id ? "btn-primary" : "btn-ghost")} onClick={()=>setSelId(e.id)}>{e.name}</button>
+          ))}
+        </div>
+      </div>
+      {sel && <EntryView key={sel.id} emp={sel} entries={entries} upsertEntry={upsertEntry} certs={{}} certifyPeriod={()=>{}} manualLocks={manualLocks} showToast={showToast} />}
+    </>
+  );
+}
+
 function App() {
   const [loaded, setLoaded] = useState(false);
   const [authUser, setAuthUser] = useState(undefined);   // undefined=checking, null=signed out, object=signed in
@@ -571,11 +599,15 @@ function App() {
           persistEmployees={persistEmployees} deleteEntry={deleteOwnerEntry} showToast={showToast} />
       )}
 
-      {/* signed in as NP → only their own entry screen */}
+      {/* signed in as staff/manager → scoped entry screen */}
       {authUser && !isOwner && (
-        myEmp
-          ? <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} showToast={showToast} />
-          : <div className="card"><div className="empty">You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees &amp; rates, then sign out and back in.</div></div>
+        !myEmp
+          ? <div className="card"><div className="empty">You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees &amp; rates, then sign out and back in.</div></div>
+          : myEmp.isManager
+            ? <ManagerView manager={myEmp} employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast} />
+            : myEmp.managedBy
+              ? <div className="card"><div className="empty">Your hours are entered for you by the office manager — there's nothing to log here. Reach out to the office if something looks off.</div></div>
+              : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} showToast={showToast} />
       )}
 
       <div className={"toast"+(toast?" show":"")}>{toast}</div>
@@ -618,7 +650,8 @@ function NPLogin({ showToast }) {
     if (!raw) { setErr("Enter your email or username."); return; }
     setBusy(true);
     try {
-      const { usernames, dir } = await loadPublicRoster();
+      const { usernames, dir, managed } = await loadPublicRoster();
+      const managedMsg = "Your hours are entered by the office manager — you don't need to log in here.";
       let email = "", real = false;
       if (raw.includes("@")) {
         // email login: must match a current employee's email on file
@@ -626,6 +659,8 @@ function NPLogin({ showToast }) {
         if (!Object.values(dir).some(v => v === lc)) {
           setErr("That email isn't set up. Try your username, or ask the admin."); setBusy(false); return;
         }
+        const owner = Object.keys(dir).find(k => dir[k] === lc);
+        if (owner && managed.includes(owner)) { setErr(managedMsg); setBusy(false); return; }
         email = lc; real = true;
       } else {
         // username login: hard lockout to current employees, then resolve to the account email
@@ -633,6 +668,7 @@ function NPLogin({ showToast }) {
         if (Array.isArray(usernames) && !usernames.includes(u)) {
           setErr("That username isn't set up. Ask the admin to add you."); setBusy(false); return;
         }
+        if (managed.includes(u)) { setErr(managedMsg); setBusy(false); return; }
         const r = dir[u];
         if (r) { email = r; real = true; } else { email = npEmailFor(u); real = false; }
       }
@@ -1089,7 +1125,7 @@ function Rollup({ employees, entries, manualLocks, toggleLock, showToast }) {
     }
     return { emp, counts, pay, n: empEntries.length, otherAmt, otherNotes, removed };
   };
-  const rows = employees.map(emp => buildRow(emp, filtered.filter(e => e.empId === emp.id), false));
+  const rows = employees.filter(emp => !emp.isManager).map(emp => buildRow(emp, filtered.filter(e => e.empId === emp.id), false));
   // include entries from staff who have since been removed (orphaned but still recorded/owed)
   const currentIds = new Set(employees.map(e => e.id));
   const orphanGroups = {};
@@ -1414,6 +1450,15 @@ function Rates({ employees, persistEmployees, showToast }) {
     setDraft(draft.map(e => e.id===id ? {...e, patientCap: val} : e));
     markDirty();
   };
+  const setIsManager = (id, val) => {
+    // a manager enters for others and isn't paid here; clear pay + any "entered by" link
+    setDraft(draft.map(e => e.id===id ? {...e, isManager: val, managedBy: "", fixedEligible: val ? false : e.fixedEligible, patientCap: val ? "" : e.patientCap} : e));
+    markDirty();
+  };
+  const setManagedBy = (id, val) => {
+    setDraft(draft.map(e => e.id===id ? {...e, managedBy: val} : e));
+    markDirty();
+  };
   const toggleOpen = (id) => setOpenIds(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const expandAll = () => setOpenIds(new Set(draft.map(e=>e.id)));
   const collapseAll = () => setOpenIds(new Set());
@@ -1422,9 +1467,13 @@ function Rates({ employees, persistEmployees, showToast }) {
     const u = normU(emp.username);
     const nRates = VARIABLE.filter(t => Number(emp.rates?.[t.key]) > 0).length;
     const bits = [];
-    if (emp.fixedEligible) bits.push("consults+FU");
-    if (nRates) bits.push(nRates + " rate" + (nRates===1?"":"s"));
-    if (Number(emp.patientCap) > 0) bits.push("cap " + Math.round(Number(emp.patientCap)));
+    if (emp.isManager) { bits.push("office manager"); }
+    else {
+      if (emp.fixedEligible) bits.push("consults+FU");
+      if (nRates) bits.push(nRates + " rate" + (nRates===1?"":"s"));
+      if (Number(emp.patientCap) > 0) bits.push("cap " + Math.round(Number(emp.patientCap)));
+      if (emp.managedBy) bits.push("manager-entered");
+    }
     return { user: u ? "@"+u : "needs username", right: bits.length ? bits.join(" · ") : "no pay set", warn: !u };
   };
   // validate the roster → {clean} or {error}
@@ -1441,7 +1490,8 @@ function Rates({ employees, persistEmployees, showToast }) {
       for (const t of VARIABLE) { const v = e.rates?.[t.key]; if (v !== "" && v != null && !isNaN(Number(v)) && Number(v) > 0) rates[t.key] = Number(v); }
       const out = { ...e, name: e.name.trim(), username: normU(e.username), email: String(e.email||"").trim().toLowerCase(), rates, fixedEligible: !!e.fixedEligible };
       const cap = Number(e.patientCap);
-      if (cap > 0) out.patientCap = Math.round(cap); else delete out.patientCap;
+      if (cap > 0 && !e.isManager) out.patientCap = Math.round(cap); else delete out.patientCap;
+      if (e.isManager) { out.isManager = true; delete out.managedBy; } else { delete out.isManager; if (e.managedBy) out.managedBy = String(e.managedBy); else delete out.managedBy; }
       return out;
     });
     return { clean };
@@ -1523,6 +1573,23 @@ function Rates({ employees, persistEmployees, showToast }) {
                   onChange={e=>setEmail(emp.id, e.target.value)}
                   style={{maxWidth:300}} />
               </div>
+              <div style={{marginBottom:14}}>
+                <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
+                  <input type="checkbox" style={{width:"auto", margin:0}}
+                    checked={!!emp.isManager}
+                    onChange={e=>setIsManager(emp.id, e.target.checked)} />
+                  <span style={{color:"var(--ink)", fontWeight:500}}>Office manager — enters hours for others, not paid here</span>
+                </label>
+                <div className="fixed-note" style={{marginLeft:28, marginTop:4}}>
+                  When on, this person logs in only to enter hours for the staff assigned to them — no pay of their own, and they don't appear in the roll-up.
+                </div>
+              </div>
+              {emp.isManager ? (
+                <div className="fixed-note">
+                  Assign staff to this manager by setting each person's <strong>Entered by</strong> (below their rates) to this name.
+                </div>
+              ) : (
+              <>
               <div style={{marginBottom:14, paddingBottom:14, borderBottom:"1px solid var(--line)"}}>
                 <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
                   <input type="checkbox" style={{width:"auto", margin:0}}
@@ -1556,6 +1623,20 @@ function Rates({ employees, persistEmployees, showToast }) {
                   Set a number (e.g. 50) for salaried staff whose first N patients are covered. They certify once each pay period before logging extras; changing the number makes them re-certify. Leave blank for no cap.
                 </div>
               </div>
+              <div style={{marginTop:14, paddingTop:14, borderTop:"1px solid var(--line)"}}>
+                <label>Entered by</label>
+                <select value={emp.managedBy || ""} onChange={e=>setManagedBy(emp.id, e.target.value)} style={{maxWidth:300}}>
+                  <option value="">Self — this person logs in and enters their own</option>
+                  {draft.filter(m => m.isManager && m.id !== emp.id).map(m => (
+                    <option key={m.id} value={m.id}>{m.name.trim() || "(unnamed manager)"}</option>
+                  ))}
+                </select>
+                <div className="fixed-note" style={{marginTop:4}}>
+                  Pick an office manager to have them enter this person's hours. That person then can't log in themselves.
+                </div>
+              </div>
+              </>
+              )}
             </>
           )}
         </div>
