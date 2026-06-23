@@ -247,6 +247,9 @@ const payForCounts = (counts, emp) => ALL_TYPES.reduce((s,t) => {
 }, 0);
 // round quantities: decimals to 2 places, counts to int
 const qtyRound = (key, v) => isDecimal(key) ? Math.round(v*100)/100 : Math.round(v);
+// per-day caps on how much of a pay type can be logged (undefined = uncapped)
+const QTY_MAX = { perdiem: 1, clinic_hr: 8, virtual_hr: 8, hosp_hr: 12 };
+const capQty = (key, v) => QTY_MAX[key] != null ? Math.min(QTY_MAX[key], v) : v;
 const normU = s => String(s||"").trim().toLowerCase();
 
 const money = n => "$" + (Math.round(n * 100) / 100).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -660,6 +663,11 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
   const [otherOn, setOtherOn] = useState(false);     // "Other" one-off pay for the selected day
   const [otherAmt, setOtherAmt] = useState("");
   const [otherNote, setOtherNote] = useState("");
+  const [entryDirty, setEntryDirty] = useState(false);   // unsaved edits on the selected day
+  const [entrySaving, setEntrySaving] = useState(false);
+  const entryDirtyRef = useRef(false);
+  const markEntryDirty = () => { entryDirtyRef.current = true; setEntryDirty(true); };
+  const clearEntryDirty = () => { entryDirtyRef.current = false; setEntryDirty(false); };
 
   // is the chosen date inside a period that's already locked?
   const dateLocked = date ? dateInLockedPeriod(date, manualLocks) : false;
@@ -693,6 +701,7 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
     const withOther = es.find(e => e.other && Number(e.other.amount) > 0);
     if (withOther) { setOtherOn(true); setOtherAmt(String(withOther.other.amount)); setOtherNote(withOther.other.note || ""); }
     else { setOtherOn(false); setOtherAmt(""); setOtherNote(""); }
+    clearEntryDirty();   // freshly loaded day = no unsaved edits
   }, [date, emp && emp.id]);
 
   const visibleTypes = emp ? ALL_TYPES.filter(t => {
@@ -704,13 +713,14 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
   // typing: keep the raw text so the field can be emptied and hold decimals (e.g. "7.5") while editing
   const typeCount = (key, raw) => {
     if (raw !== "" && !/^\d*\.?\d*$/.test(raw)) return;   // digits + at most one decimal point
-    setCounts(c => ({...c, [key]: raw}));
+    if (raw !== "" && QTY_MAX[key] != null && Number(raw) > QTY_MAX[key]) raw = String(QTY_MAX[key]);   // cap
+    setCounts(c => ({...c, [key]: raw})); markEntryDirty();
   };
-  // − / + buttons (and a clamp): always step by a whole 1, never below 0
-  const bump = (key, delta) => setCounts(c => {
-    const n = Math.max(0, qtyRound(key, Number(c[key]||0) + delta));
+  // − / + buttons (and a clamp): always step by a whole 1, between 0 and the cap
+  const bump = (key, delta) => { setCounts(c => {
+    const n = capQty(key, Math.max(0, qtyRound(key, Number(c[key]||0) + delta)));
     return {...c, [key]: n};
-  });
+  }); markEntryDirty(); };
 
   const liveTotal = (emp ? visibleTypes.reduce((sum,t) => {
     const qty = Number(counts[t.key]||0);
@@ -718,28 +728,40 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
     return sum + qty*rate;
   }, 0) : 0) + (otherOn && Number(otherAmt) > 0 ? Number(otherAmt) : 0);
 
-  const submit = async () => {
-    if (!emp) { showToast("Enter a valid username first"); return; }
-    // an "Other" line requires both a positive amount and an explanation
+  // build the selected day's entry from the current inputs → {entry}, {incomplete}, or {skip}
+  const buildEntry = () => {
+    if (!emp) return { skip: true };
     let other = null;
     if (otherOn) {
-      const amt = Number(otherAmt);
-      if (!(amt > 0)) { showToast("Enter a dollar amount for the Other line"); return; }
-      if (!otherNote.trim()) { showToast("Add a comment explaining the Other amount"); return; }
-      other = { amount: Math.round(amt*100)/100, note: otherNote.trim() };
+      if (!(Number(otherAmt) > 0) || !otherNote.trim()) return { incomplete: true };   // Other started, not finished
+      other = { amount: Math.round(Number(otherAmt)*100)/100, note: otherNote.trim() };
     }
-    const hasCounts = Object.values(counts).some(v => Number(v) > 0);
-    const existing = dayEntries(date);
-    if (!hasCounts && !other && existing.length === 0) { showToast("Enter at least one count or an Other amount"); return; }
-    // preserve the existing row's id when editing an already-logged day
-    const id = (existing[0] && existing[0].id) || ("e_"+Date.now()+"_"+Math.random().toString(36).slice(2,7));
     const cleanCounts = {};
-    Object.keys(counts).forEach(k => { const n = qtyRound(k, Number(counts[k]||0)); if (n > 0) cleanCounts[k] = n; });
+    Object.keys(counts).forEach(k => { const n = capQty(k, qtyRound(k, Number(counts[k]||0))); if (n > 0) cleanCounts[k] = n; });
+    const existing = dayEntries(date);
+    if (!Object.keys(cleanCounts).length && !other && existing.length === 0) return { skip: true };   // nothing to save
+    const id = (existing[0] && existing[0].id) || ("e_"+Date.now()+"_"+Math.random().toString(36).slice(2,7));
     const entry = { id, empId: emp.id, username: normU(emp.username), date, counts: cleanCounts };
     if (other) entry.other = other;
-    const kept = await upsertEntry(entry);
-    showToast(kept ? ("Saved · " + money(liveTotal) + " · " + fmtShortYr(date)) : ("Cleared · " + fmtShortYr(date)));
+    return { entry };
   };
+  const saveEntry = async () => {
+    const r = buildEntry();
+    if (r.incomplete) return;                       // wait until the Other line is complete (stay dirty)
+    if (r.skip) { clearEntryDirty(); return; }       // nothing to save
+    setEntrySaving(true);
+    await upsertEntry(r.entry);
+    setEntrySaving(false);
+    clearEntryDirty();
+  };
+  // flush a pending save immediately (e.g. before switching days, so edits aren't lost)
+  const flushEntry = () => { if (entryDirtyRef.current) saveEntry(); };
+  // debounced auto-save after the last edit
+  useEffect(() => {
+    if (!entryDirty) return;
+    const id = setTimeout(() => saveEntry(), 700);
+    return () => clearTimeout(id);
+  }, [entryDirty, counts, otherOn, otherAmt, otherNote]);
 
   return (
     <div className="card">
@@ -751,9 +773,9 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
           <div style={{height:22}} />
           <div className="period-nav">
             <div style={{display:"flex", alignItems:"center", gap:10}}>
-              <button onClick={()=>setPeriodIdx(i=>i-1)} aria-label="Previous pay period">‹</button>
+              <button onClick={()=>{ flushEntry(); setPeriodIdx(i=>i-1); }} aria-label="Previous pay period">‹</button>
               <div className="pn-label">{fmtShortYr(period.start)} – {fmtShortYr(period.end)}</div>
-              <button onClick={()=>setPeriodIdx(i=>Math.min(maxPeriodIdx, i+1))} disabled={periodIdx>=maxPeriodIdx} aria-label="Next pay period">›</button>
+              <button onClick={()=>{ flushEntry(); setPeriodIdx(i=>Math.min(maxPeriodIdx, i+1)); }} disabled={periodIdx>=maxPeriodIdx} aria-label="Next pay period">›</button>
             </div>
             <div className="period-total">This period:<span className="pay" style={{marginLeft:6}}>{money(periodDollars)}</span></div>
           </div>
@@ -769,7 +791,7 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
                 + (iso===todayISO() ? " today" : "")
                 + (locked ? " locked" : "");
               return (
-                <div className={cls} key={iso} onClick={()=>setDate(iso)}>
+                <div className={cls} key={iso} onClick={()=>{ flushEntry(); setDate(iso); }}>
                   <div className="dnum">{parseDate(iso).getDate()}{locked ? " 🔒" : ""}</div>
                   {logged
                     ? <div className="damt">{money(dayDollars(iso))}</div>
@@ -800,7 +822,7 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
                 <div className="counter" key={t.key}>
                   <div>
                     <div className="clabel">{t.label}</div>
-                    <div className="crate">{money(rate)} / {t.unit}</div>
+                    <div className="crate">{money(rate)} / {t.unit}{QTY_MAX[t.key] != null ? " · max " + QTY_MAX[t.key] : ""}</div>
                   </div>
                   <div className="stepper">
                     <button onClick={()=>bump(t.key, -1)}>−</button>
@@ -829,7 +851,7 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
           <div className="other-box">
             <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
               <input type="checkbox" style={{width:"auto", margin:0}}
-                checked={otherOn} onChange={e=>setOtherOn(e.target.checked)} />
+                checked={otherOn} onChange={e=>{ setOtherOn(e.target.checked); markEntryDirty(); }} />
               <span style={{color:"var(--ink)", fontWeight:500}}>Other — a one-off amount not covered above</span>
             </label>
             {otherOn && (
@@ -838,13 +860,13 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
                   <div style={{maxWidth:200}}>
                     <label>Amount ($)</label>
                     <input type="number" min="0" step="0.01" placeholder="0.00"
-                      value={otherAmt} onChange={e=>setOtherAmt(e.target.value)}
+                      value={otherAmt} onChange={e=>{ setOtherAmt(e.target.value); markEntryDirty(); }}
                       style={ !(Number(otherAmt) > 0) ? {borderColor:"var(--danger)"} : null } />
                   </div>
                   <div style={{flex:"1 1 220px", minWidth:0}}>
                     <label>Explanation (required)</label>
                     <input type="text" placeholder="What is this for?"
-                      value={otherNote} onChange={e=>setOtherNote(e.target.value)}
+                      value={otherNote} onChange={e=>{ setOtherNote(e.target.value); markEntryDirty(); }}
                       style={ !otherNote.trim() ? {borderColor:"var(--danger)"} : null } />
                   </div>
                 </div>
@@ -861,8 +883,10 @@ function EntryView({ emp, entries, upsertEntry, manualLocks, showToast }) {
             <div style={{alignSelf:"center", marginRight:"auto", fontSize:14, color:"var(--muted)"}}>
               This entry: <span className="pay">{money(liveTotal)}</span>
             </div>
-            <button className="btn btn-ghost" onClick={()=>{ setCounts({}); setOtherOn(false); setOtherAmt(""); setOtherNote(""); }}>Clear</button>
-            <button className="btn btn-primary" onClick={submit}>Save entry</button>
+            <span style={{alignSelf:"center", fontSize:13, fontWeight:500, color:"var(--accent-ink)"}}>
+              {(entrySaving || entryDirty) ? "Saving…" : dayEntries(date).length ? "✓ Saved" : ""}
+            </span>
+            <button className="btn btn-ghost" onClick={()=>{ setCounts({}); setOtherOn(false); setOtherAmt(""); setOtherNote(""); markEntryDirty(); }}>Clear</button>
           </div>
         </>
       )}
@@ -1229,7 +1253,7 @@ function Rates({ employees, persistEmployees, showToast }) {
         const a = draftRef.current.slice();
         const [m] = a.splice(oldIndex, 1); a.splice(newIndex, 0, m);
         setDraft(a);
-        save(a, "Order saved");   // auto-save the new roster order
+        save(a);   // auto-save the new roster order
       },
     });
     return () => s.destroy();
@@ -1274,31 +1298,37 @@ function Rates({ employees, persistEmployees, showToast }) {
     if (nRates) bits.push(nRates + " rate" + (nRates===1?"":"s"));
     return { user: u ? "@"+u : "needs username", right: bits.length ? bits.join(" · ") : "no pay set", warn: !u };
   };
-  const save = async (sourceArr, quietMsg) => {
-    const named = (sourceArr || draft).filter(e => e.name.trim());
-    // validation: every employee needs a username, and usernames must be unique (normalized)
-    const missing = named.filter(e => !normU(e.username));
-    if (missing.length) { showToast("Every employee needs a username (" + missing[0].name.trim() + " is missing one)"); return; }
+  // validate the roster → {clean} or {error}
+  const buildClean = (source) => {
+    const named = source.filter(e => e.name.trim());
+    const missing = named.find(e => !normU(e.username));
+    if (missing) return { error: "Add a username for " + missing.name.trim() + " to save" };
     const seen = {};
-    for (const e of named) {
-      const u = normU(e.username);
-      if (seen[u]) { showToast('Username "'+u+'" is used by two people — make it unique'); return; }
-      seen[u] = true;
-    }
+    for (const e of named) { const u = normU(e.username); if (seen[u]) return { error: 'Username "'+u+'" is used twice — make it unique' }; seen[u] = true; }
     const clean = named.map(e => {
       const rates = {};
-      for (const t of VARIABLE) {
-        const v = e.rates?.[t.key];
-        if (v !== "" && v != null && !isNaN(Number(v)) && Number(v) > 0) rates[t.key] = Number(v);
-      }
+      for (const t of VARIABLE) { const v = e.rates?.[t.key]; if (v !== "" && v != null && !isNaN(Number(v)) && Number(v) > 0) rates[t.key] = Number(v); }
       return { ...e, name: e.name.trim(), username: normU(e.username), rates, fixedEligible: !!e.fixedEligible };
     });
-    setSaving(true);
-    markClean();                       // mark clean first so the post-save sync re-syncs the cleaned draft
-    await persistEmployees(clean);
-    setSaving(false);
-    showToast(quietMsg || "Saved");
+    return { clean };
   };
+  const persistClean = async (clean) => { setSaving(true); markClean(); await persistEmployees(clean); setSaving(false); };
+  const save = async (sourceArr) => {        // explicit/manual (surfaces validation errors)
+    const r = buildClean(sourceArr || draftRef.current);
+    if (r.error) { showToast(r.error); return; }
+    await persistClean(r.clean);
+  };
+  const autoSave = async () => {             // quiet; waits silently until valid
+    const r = buildClean(draftRef.current);
+    if (!r.error) await persistClean(r.clean);
+  };
+  // debounced auto-save: persist shortly after the last edit
+  useEffect(() => {
+    if (!dirty) return;
+    const id = setTimeout(() => autoSave(), 800);
+    return () => clearTimeout(id);
+  }, [dirty, draft]);
+  const blockReason = dirty ? (buildClean(draft).error || null) : null;
 
   return (
     <div className="card">
@@ -1383,14 +1413,10 @@ function Rates({ employees, persistEmployees, showToast }) {
       </div>
 
       {draft.length>0 && (
-        <div className="actions" style={{justifyContent:"flex-end", alignItems:"center", gap:12}}>
-          <span style={{fontSize:13, color: dirty ? "var(--amber)" : "var(--accent-ink)"}}>
-            {saving ? "Saving…" : dirty ? "● Unsaved changes" : "✓ All changes saved"}
+        <div className="actions" style={{justifyContent:"flex-end", alignItems:"center"}}>
+          <span style={{fontSize:13, fontWeight:500, color: blockReason ? "var(--amber)" : "var(--accent-ink)"}}>
+            {saving ? "Saving…" : blockReason ? blockReason : dirty ? "Saving…" : "✓ All changes saved"}
           </span>
-          <button className={"btn " + (dirty && !saving ? "btn-attention" : "btn-ghost")}
-            onClick={()=>save()} disabled={saving || !dirty}>
-            {saving ? "Saving…" : dirty ? "Save changes" : "✓ Saved"}
-          </button>
         </div>
       )}
     </div>
