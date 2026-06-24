@@ -1072,7 +1072,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     }
     const annual = Number(salaries && salaries[emp.id] || 0);
     const computedBase = mode === "period" && annual > 0 ? annual / 26 : 0;
-    const base = has(adj.base) ? Number(adj.base) : computedBase;
+    const base = computedBase;
     const bonus = Number(adj.bonus) || 0;
     const reimb = Number(adj.reimbursement) || 0;
     const notes = adj.notes || "";
@@ -1127,26 +1127,49 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     else setSortKey(null);
   };
   const sortTh = (k, label, num) => /* @__PURE__ */ React.createElement("th", { className: num ? "num" : "", onClick: () => sortBy(k), style: { cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" } }, label, sortKey === k ? sortDir === "asc" ? " \u25B2" : " \u25BC" : "");
-  const ovCell = (r, field, eff) => /* @__PURE__ */ React.createElement("td", { className: "num" }, editable ? /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      className: "cell-in",
-      type: "text",
-      inputMode: "decimal",
-      value: has(r.adj[field]) ? r.adj[field] : eff ? Math.round(eff * 100) / 100 : "",
-      onChange: (e) => setAdj(r.emp.id, field, e.target.value)
+  const [pendingCell, setPendingCell] = useState(null);
+  const [overrideOk, setOverrideOk] = useState(false);
+  const confirmedRef = useRef(/* @__PURE__ */ new Set());
+  const pendingElRef = useRef(null);
+  const guardEdit = (e, key, label, cur) => {
+    if (confirmedRef.current.has(key) || cur === "" || cur == null) {
+      confirmedRef.current.add(key);
+      return;
     }
-  ) : eff ? money(eff) : "");
-  const cntCell = (r, t) => /* @__PURE__ */ React.createElement("td", { className: "num cnt" }, editable ? /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      className: "cell-in cnt-in",
-      type: "text",
-      inputMode: "numeric",
-      value: r.adj.counts && has(r.adj.counts[t]) ? r.adj.counts[t] : r.counts[t] || "",
-      onChange: (e) => setAdj(r.emp.id, "count." + t, e.target.value)
-    }
-  ) : r.counts[t] || "");
+    pendingElRef.current = e.target;
+    e.target.blur();
+    setPendingCell({ key, label, cur });
+  };
+  const ovCell = (r, field, eff, label) => {
+    const cur = has(r.adj[field]) ? r.adj[field] : eff ? Math.round(eff * 100) / 100 : "";
+    const key = periodIdx + ":" + r.emp.id + ":" + field;
+    return /* @__PURE__ */ React.createElement("td", { className: "num" }, editable ? /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        className: "cell-in",
+        type: "text",
+        inputMode: "decimal",
+        value: cur,
+        onFocus: (e) => guardEdit(e, key, (lastFirst(r.emp.name) || "This person") + " \xB7 " + label, cur),
+        onChange: (e) => setAdj(r.emp.id, field, e.target.value)
+      }
+    ) : eff ? money(eff) : "");
+  };
+  const cntCell = (r, t, label) => {
+    const cur = r.adj.counts && has(r.adj.counts[t]) ? r.adj.counts[t] : r.counts[t] || "";
+    const key = periodIdx + ":" + r.emp.id + ":count." + t;
+    return /* @__PURE__ */ React.createElement("td", { className: "num cnt" }, editable ? /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        className: "cell-in cnt-in",
+        type: "text",
+        inputMode: "numeric",
+        value: cur,
+        onFocus: (e) => guardEdit(e, key, (lastFirst(r.emp.name) || "This person") + " \xB7 " + label, cur),
+        onChange: (e) => setAdj(r.emp.id, "count." + t, e.target.value)
+      }
+    ) : r.counts[t] || "");
+  };
   const empById = (id) => employees.find((x) => x.id === id);
   const dayTotal = (iso) => entries.filter((e) => e.date === iso).reduce((s, e) => s + payForEntry(empById(e.empId), e), 0);
   const calFirst = new Date(calY, calM, 1);
@@ -1202,7 +1225,24 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
   };
   const autoLocked = isPeriodLocked(selPeriod);
   const manualLocked = Array.isArray(manualLocks) && manualLocks.includes(periodIdx);
-  return /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("h2", null, "Roll-up"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Review by pay period, a single day, or a custom range. Pay periods run Sunday\u2013Saturday (14 days), paid the Friday after close."), /* @__PURE__ */ React.createElement("div", { className: "tabs", style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "period" ? " active" : ""), onClick: () => setMode("period") }, "Pay period"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "day" ? " active" : ""), onClick: () => setMode("day") }, "Day"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "custom" ? " active" : ""), onClick: () => setMode("custom") }, "Custom range")), mode === "period" && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("label", null, "Pay period"), /* @__PURE__ */ React.createElement("select", { value: periodIdx, onChange: (e) => setPeriodIdx(Number(e.target.value)) }, periods.map((p) => /* @__PURE__ */ React.createElement("option", { key: p.index, value: p.index }, fmtShortYr(p.start), " \u2013 ", fmtShortYr(p.end), "  \xB7  paid ", fmtShortYr(p.payday), p.index === currentPeriodIndex() ? "  (current)" : ""))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: "var(--muted)" } }, "Payday ", /* @__PURE__ */ React.createElement("strong", null, fmtShortYr(selPeriod.payday))), locked ? /* @__PURE__ */ React.createElement("span", { className: "pill", style: { background: "var(--danger-soft)", color: "var(--danger)" } }, "\u{1F512} Locked", manualLocked ? " (manual)" : autoLocked ? " (72h pre-payday)" : "") : /* @__PURE__ */ React.createElement("span", { className: "pill", style: { background: "var(--accent-soft)", color: "var(--accent-ink)" } }, "Open"), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "card" }, pendingCell && /* @__PURE__ */ React.createElement("div", { className: "modal-backdrop", onClick: () => {
+    setPendingCell(null);
+    setOverrideOk(false);
+  } }, /* @__PURE__ */ React.createElement("div", { className: "modal", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("h3", null, "Override an existing value?"), /* @__PURE__ */ React.createElement("p", null, /* @__PURE__ */ React.createElement("strong", null, pendingCell.label), " already has the value ", /* @__PURE__ */ React.createElement("strong", null, pendingCell.cur), ". Editing it replaces that value for payroll."), /* @__PURE__ */ React.createElement("label", { className: "modal-check" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: overrideOk, onChange: (e) => setOverrideOk(e.target.checked) }), " Yes, I want to override it"), /* @__PURE__ */ React.createElement("div", { className: "modal-actions" }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: () => {
+    setPendingCell(null);
+    setOverrideOk(false);
+  } }, "Cancel"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-primary", disabled: !overrideOk, onClick: () => {
+    confirmedRef.current.add(pendingCell.key);
+    setPendingCell(null);
+    setOverrideOk(false);
+    const el = pendingElRef.current;
+    setTimeout(() => {
+      try {
+        el && el.focus();
+      } catch (ex) {
+      }
+    }, 0);
+  } }, "Continue")))), /* @__PURE__ */ React.createElement("h2", null, "Roll-up"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Review by pay period, a single day, or a custom range. Pay periods run Sunday\u2013Saturday (14 days), paid the Friday after close."), /* @__PURE__ */ React.createElement("div", { className: "tabs", style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "period" ? " active" : ""), onClick: () => setMode("period") }, "Pay period"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "day" ? " active" : ""), onClick: () => setMode("day") }, "Day"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "custom" ? " active" : ""), onClick: () => setMode("custom") }, "Custom range")), mode === "period" && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("label", null, "Pay period"), /* @__PURE__ */ React.createElement("select", { value: periodIdx, onChange: (e) => setPeriodIdx(Number(e.target.value)) }, periods.map((p) => /* @__PURE__ */ React.createElement("option", { key: p.index, value: p.index }, fmtShortYr(p.start), " \u2013 ", fmtShortYr(p.end), "  \xB7  paid ", fmtShortYr(p.payday), p.index === currentPeriodIndex() ? "  (current)" : ""))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: "var(--muted)" } }, "Payday ", /* @__PURE__ */ React.createElement("strong", null, fmtShortYr(selPeriod.payday))), locked ? /* @__PURE__ */ React.createElement("span", { className: "pill", style: { background: "var(--danger-soft)", color: "var(--danger)" } }, "\u{1F512} Locked", manualLocked ? " (manual)" : autoLocked ? " (72h pre-payday)" : "") : /* @__PURE__ */ React.createElement("span", { className: "pill", style: { background: "var(--accent-soft)", color: "var(--accent-ink)" } }, "Open"), /* @__PURE__ */ React.createElement(
     "button",
     {
       className: "btn btn-ghost",
@@ -1219,7 +1259,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     const tot = dayTotal(iso);
     const cls = "day-cell" + (iso === dayDate ? " selected" : "") + (tot > 0 ? " logged" : "") + (iso === todayISO() ? " today" : "");
     return /* @__PURE__ */ React.createElement("div", { className: cls, key: iso, onClick: () => setDayDate(iso) }, /* @__PURE__ */ React.createElement("div", { className: "dnum" }, d), tot > 0 ? /* @__PURE__ */ React.createElement("div", { className: "damt" }, money(tot)) : /* @__PURE__ */ React.createElement("div", { className: "dempty" }, "\u2014"));
-  }))), lateEntries.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "card", style: { background: "var(--danger-soft)", border: "1px solid var(--danger)", marginBottom: 18, padding: "12px 16px" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "var(--danger)", fontWeight: 600, fontSize: 14 } }, "\u26A0 ", lateEntries.length, " late ", lateEntries.length === 1 ? "entry" : "entries", " added after this period locked"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "var(--danger)", marginTop: 4 } }, "These were logged after the lock cutoff and are included in the totals above. Review before paying \u2014 someone logged work for a period you may have already processed.")), /* @__PURE__ */ React.createElement("div", { className: "metric-grid" }, /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Total payout"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, money(grand))), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Consults"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalConsults)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Follow-ups"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalFollow)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Entries"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, filtered.length))), /* @__PURE__ */ React.createElement("div", { className: "scroll-x" }, /* @__PURE__ */ React.createElement("table", { className: "rollup-table" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, sortTh("name", "Employee"), sortTh("pay", "Pay", true), sortTh("base", "Base", true), sortTh("variable", "Variable", true), sortTh("bonus", "Bonus", true), sortTh("reimb", "Reimburse", true), sortTh("consults", "Cons", true), sortTh("followups", "F/U", true), sortTh("clinic_pts", "Clinic pts", true), sortTh("perdiem", "Per diem", true), sortTh("clinic_hr", "Clinic hr", true), sortTh("virtual_hr", "Virtual hr", true), sortTh("hosp_hr", "Hosp hr", true), sortTh("other", "Other", true), /* @__PURE__ */ React.createElement("th", { style: { whiteSpace: "nowrap" } }, "Notes"))), /* @__PURE__ */ React.createElement("tbody", null, sortedRows.map((r) => /* @__PURE__ */ React.createElement("tr", { key: r.emp.id }, /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, lastFirst(r.emp.name)), /* @__PURE__ */ React.createElement("td", { className: "num pay" }, money(r.pay)), ovCell(r, "base", r.base), ovCell(r, "variable", r.variable), ovCell(r, "bonus", r.bonus), ovCell(r, "reimbursement", r.reimb), cntCell(r, "consults"), cntCell(r, "followups"), cntCell(r, "clinic_pts"), cntCell(r, "perdiem"), cntCell(r, "clinic_hr"), cntCell(r, "virtual_hr"), cntCell(r, "hosp_hr"), ovCell(r, "other", r.otherAmt), /* @__PURE__ */ React.createElement("td", null, editable ? /* @__PURE__ */ React.createElement(
+  }))), lateEntries.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "card", style: { background: "var(--danger-soft)", border: "1px solid var(--danger)", marginBottom: 18, padding: "12px 16px" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "var(--danger)", fontWeight: 600, fontSize: 14 } }, "\u26A0 ", lateEntries.length, " late ", lateEntries.length === 1 ? "entry" : "entries", " added after this period locked"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "var(--danger)", marginTop: 4 } }, "These were logged after the lock cutoff and are included in the totals above. Review before paying \u2014 someone logged work for a period you may have already processed.")), /* @__PURE__ */ React.createElement("div", { className: "metric-grid" }, /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Total payout"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, money(grand))), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Consults"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalConsults)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Follow-ups"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalFollow)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Entries"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, filtered.length))), /* @__PURE__ */ React.createElement("div", { className: "scroll-x" }, /* @__PURE__ */ React.createElement("table", { className: "rollup-table" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, sortTh("name", "Employee"), sortTh("pay", "Pay", true), sortTh("base", "Base", true), sortTh("variable", "Variable", true), sortTh("bonus", "Bonus", true), sortTh("reimb", "Reimburse", true), sortTh("consults", "Cons", true), sortTh("followups", "F/U", true), sortTh("clinic_pts", "Clinic pts", true), sortTh("perdiem", "Per diem", true), sortTh("clinic_hr", "Clinic hr", true), sortTh("virtual_hr", "Virtual hr", true), sortTh("hosp_hr", "Hosp hr", true), sortTh("other", "Other", true), /* @__PURE__ */ React.createElement("th", { style: { whiteSpace: "nowrap" } }, "Notes"))), /* @__PURE__ */ React.createElement("tbody", null, sortedRows.map((r) => /* @__PURE__ */ React.createElement("tr", { key: r.emp.id }, /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, lastFirst(r.emp.name)), /* @__PURE__ */ React.createElement("td", { className: "num pay" }, money(r.pay)), /* @__PURE__ */ React.createElement("td", { className: "num" }, r.base ? money(r.base) : ""), ovCell(r, "variable", r.variable, "Variable"), ovCell(r, "bonus", r.bonus, "Bonus"), ovCell(r, "reimbursement", r.reimb, "Reimbursement"), cntCell(r, "consults", "Consults"), cntCell(r, "followups", "Follow-ups"), cntCell(r, "clinic_pts", "Clinic pts"), cntCell(r, "perdiem", "Per diem"), cntCell(r, "clinic_hr", "Clinic hr"), cntCell(r, "virtual_hr", "Virtual hr"), cntCell(r, "hosp_hr", "Hosp hr"), ovCell(r, "other", r.otherAmt, "Other"), /* @__PURE__ */ React.createElement("td", null, editable ? /* @__PURE__ */ React.createElement(
     "input",
     {
       className: "cell-in notes-in",
