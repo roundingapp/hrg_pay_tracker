@@ -411,6 +411,21 @@ function App() {
       clearInterval(id);
     };
   }, [refresh]);
+  useEffect(() => {
+    if (!uid || !window._fs || !window._fs.onSnapshot) return;
+    const ref = window._fs.doc(window._db, "paytracker", "employees");
+    const unsub = window._fs.onSnapshot(ref, (snap) => {
+      const v = snap.exists() && snap.data() ? snap.data().value : [];
+      setEmployees(Array.isArray(v) ? v : []);
+    }, () => {
+    });
+    return () => {
+      try {
+        unsub && unsub();
+      } catch (e) {
+      }
+    };
+  }, [uid]);
   const persistEmployees = useCallback(async (next) => {
     setEmployees(next);
     await sSet("employees", next);

@@ -237,7 +237,7 @@
 <!-- ============================================================= -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getFirestore, initializeFirestore, doc, getDoc, getDocFromServer, setDoc, collection, getDocs, getDocsFromServer }
+  import { getFirestore, initializeFirestore, doc, getDoc, getDocFromServer, setDoc, collection, getDocs, getDocsFromServer, onSnapshot }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail, sendPasswordResetEmail }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -261,7 +261,7 @@
   // cache) — critical for payroll. Falls back to the normal read only if the server is unreachable.
   const getDocLive = async (ref) => { try { return await getDocFromServer(ref); } catch (e) { return await getDoc(ref); } };
   const getDocsLive = async (q) => { try { return await getDocsFromServer(q); } catch (e) { return await getDocs(q); } };
-  window._fs = { doc, getDoc: getDocLive, setDoc, collection, getDocs: getDocsLive };
+  window._fs = { doc, getDoc: getDocLive, setDoc, collection, getDocs: getDocsLive, onSnapshot };
   window._auth = getAuth(app);
   window._authfns = { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail, sendPasswordResetEmail };
   window._firebaseReady = true;
@@ -273,6 +273,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
 
-<script defer src="app.js?v=7d73e4dd"></script>
+<script defer src="app.js?v=1a4a820c"></script>
 </body>
 </html>
