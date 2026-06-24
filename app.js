@@ -360,16 +360,25 @@ function App() {
       setManualLocks([]);
       return;
     }
-    const emps = await sGet("employees", null);
-    const locks = await sGet("manualLocks", []);
+    const owner = isOwnerUser(u);
+    const [emps, locks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2] = await Promise.all([
+      sGet("employees", null),
+      sGet("manualLocks", []),
+      owner ? loadAllEntries() : loadEntriesForUid(u.uid),
+      owner ? Promise.resolve({}) : loadCertsForUid(u.uid),
+      owner ? loadSalaries() : Promise.resolve({}),
+      owner ? Promise.resolve(0) : loadMySalary(u.uid),
+      owner ? loadAdjustments() : Promise.resolve({}),
+      owner ? Promise.resolve({}) : loadMyAdj(u.uid)
+    ]);
     setEmployees(emps && emps.length ? emps : []);
     setManualLocks(Array.isArray(locks) ? locks : []);
-    setEntries(isOwnerUser(u) ? await loadAllEntries() : await loadEntriesForUid(u.uid));
-    setCerts(isOwnerUser(u) ? {} : await loadCertsForUid(u.uid));
-    setSalaries(isOwnerUser(u) ? await loadSalaries() : {});
-    setMySalary(isOwnerUser(u) ? 0 : await loadMySalary(u.uid));
-    setAdjustments(isOwnerUser(u) ? await loadAdjustments() : {});
-    setMyAdj(isOwnerUser(u) ? {} : await loadMyAdj(u.uid));
+    setEntries(entries2);
+    setCerts(certs2);
+    setSalaries(salaries2);
+    setMySalary(mySalary2);
+    setAdjustments(adjustments2);
+    setMyAdj(myAdj2);
   }, []);
   useEffect(() => {
     if (!window._auth || !window._authfns) {
