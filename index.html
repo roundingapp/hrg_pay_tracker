@@ -1731,7 +1731,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     const name = newName.trim();
     if (!name) return;
     const id = "emp_"+Date.now()+"_"+Math.random().toString(36).slice(2,6);
-    const next = [...draft, { id, name, rates: {}, fixedEligible: true }];
+    const next = [...draft, { id, name, rates: {}, fixedEligible: false }];   // Consults + Follow-ups off by default
     setDraft(next); setNewName(""); markDirty();
     setOpenIds(s => new Set(s).add(id));   // a freshly added employee starts expanded
   };
