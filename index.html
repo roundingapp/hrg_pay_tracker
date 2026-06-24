@@ -280,6 +280,17 @@ const lastNameKey = (name) => {
   const w = String(name||"").trim().toLowerCase().replace(/[.,]/g,"").split(/\s+/).filter(x => x && !CRED_SUFFIX.has(x));
   return (w[w.length-1] || "") + " " + (w[0] || "");
 };
+// admin display: "Last, First [credential]" from a stored "First [Middle] Last [credential]" name
+const lastFirst = (name) => {
+  const raw = String(name||"").trim();
+  if (!raw || /\(removed\)/i.test(raw)) return raw;
+  const words = raw.split(/\s+/);
+  const creds = [];
+  while (words.length > 2 && CRED_SUFFIX.has(words[words.length-1].toLowerCase().replace(/[.,]/g,""))) creds.unshift(words.pop());
+  if (words.length < 2) return raw;
+  const last = words.pop();
+  return last + ", " + words.join(" ") + (creds.length ? " " + creds.join(" ") : "");
+};
 
 const money = n => "$" + (Math.round(n * 100) / 100).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const todayISO = () => new Date().toISOString().slice(0,10);
@@ -1366,7 +1377,7 @@ function Rollup({ employees, entries, salaries, manualLocks, toggleLock, showToa
           <tbody>
             {sortedRows.map(r => (
               <tr key={r.emp.id}>
-                <td>{r.emp.name}</td>
+                <td>{lastFirst(r.emp.name)}</td>
                 <td className="num pay">{money(r.pay)}</td>
                 <td className="num">{r.base ? money(r.base) : ""}</td>
                 <td className="num">{r.variable ? money(r.variable) : ""}</td>
@@ -1411,7 +1422,7 @@ function Rollup({ employees, entries, salaries, manualLocks, toggleLock, showToa
               {rows.flatMap(r => r.otherNotes.map((o, i) => (
                 <tr key={r.emp.id+"-o"+i}>
                   <td style={{whiteSpace:"nowrap"}}>{fmtShortYr(o.date)}</td>
-                  <td style={{whiteSpace:"nowrap"}}>{r.emp.name}</td>
+                  <td style={{whiteSpace:"nowrap"}}>{lastFirst(r.emp.name)}</td>
                   <td className="num pay">{money(o.amount)}</td>
                   <td>{o.note || "—"}</td>
                 </tr>
@@ -1635,7 +1646,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
             <span className="drag-handle" title="Drag to reorder">⠿</span>
             <div className="emp-head" onClick={()=>toggleOpen(emp.id)}>
               <span className="emp-chev">{open ? "▾" : "▸"}</span>
-              <span className="emp-name-txt">{(emp.name && emp.name.trim()) || "Unnamed employee"}</span>
+              <span className="emp-name-txt">{lastFirst(emp.name) || "Unnamed employee"}</span>
               {!open && <span className={"emp-meta"+(meta.warn?" warn":"")}>{meta.user} · {meta.right}</span>}
             </div>
             {open && <button className="btn btn-danger" onClick={()=>removeEmp(emp.id)}>Remove</button>}
@@ -1724,7 +1735,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                       <select value={emp.managedBy || ""} onChange={e=>setManagedBy(emp.id, e.target.value)} style={{maxWidth:340}}>
                         <option value="">Self — logs in &amp; enters their own</option>
                         {draft.filter(m => m.isManager && m.id !== emp.id).map(m => (
-                          <option key={m.id} value={m.id}>Entered by {m.name.trim() || "(unnamed manager)"}</option>
+                          <option key={m.id} value={m.id}>Entered by {lastFirst(m.name) || "(unnamed manager)"}</option>
                         ))}
                       </select>
                     </div>
@@ -1785,7 +1796,7 @@ function AllEntries({ employees, entries, deleteEntry, showToast }) {
               return (
                 <tr key={(e._uid||"")+e.id}>
                   <td style={{whiteSpace:"nowrap"}}>{e.date}</td>
-                  <td>{nameOf(e)}</td>
+                  <td>{lastFirst(nameOf(e))}</td>
                   <td style={{color:"var(--muted)"}}>{summarize(e)}</td>
                   <td className="num pay">{money(payForEntry(emp, e))}</td>
                   <td style={{textAlign:"right"}}><button className="btn btn-danger" style={{padding:"5px 12px"}} onClick={()=>del(e)}>Delete</button></td>
