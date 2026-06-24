@@ -693,7 +693,8 @@ function App() {
             <button className="btn" onClick={exitImpersonate}>Exit view</button>
           </div>
           <EntryView key={impersonate.id} emp={impersonate} entries={entries} upsertEntry={upsertForImpersonated}
-            certs={impersonateCerts} certifyPeriod={certifyForImpersonated} manualLocks={manualLocks} showToast={showToast} />
+            certs={impersonateCerts} certifyPeriod={certifyForImpersonated} manualLocks={manualLocks}
+            audit={true} baseSalary={salaries[impersonate.id]} showToast={showToast} />
         </>
       )}
 
@@ -890,7 +891,7 @@ function OwnerLogin({ showToast }) {
 }
 
 /* ---------- entry view ---------- */
-function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast }) {
+function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary }) {
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
@@ -923,6 +924,8 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const capped = cap > 0;
   const cert = certs && certs[String(periodIdx)];
   const certifiedForPeriod = !capped || (cert && Number(cert.cap) === cap);
+  const gateOpen = certifiedForPeriod || !!audit;   // owner audit ("view as") edits past the cap gate
+  const baseBiweekly = Number(baseSalary) > 0 ? Number(baseSalary) / 26 : 0;   // shown when known (owner view-as)
   const periodLabel = fmtShortYr(period.start) + " – " + fmtShortYr(period.end);
 
   // when navigating to another period, pull the selected day into that period
@@ -1019,7 +1022,11 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
               <div className="pn-label">{fmtShortYr(period.start)} – {fmtShortYr(period.end)}</div>
               <button onClick={()=>{ flushEntry(); setPeriodIdx(i=>Math.min(maxPeriodIdx, i+1)); }} disabled={periodIdx>=maxPeriodIdx} aria-label="Next pay period">›</button>
             </div>
-            <div className="period-total">This period:<span className="pay" style={{marginLeft:6}}>{money(periodDollars)}</span></div>
+            <div className="period-total">
+              {baseBiweekly > 0
+                ? <span>Base <span className="pay">{money(baseBiweekly)}</span> · Variable <span className="pay">{money(periodDollars)}</span> · Total <span className="pay">{money(baseBiweekly + periodDollars)}</span></span>
+                : <span>This period:<span className="pay" style={{marginLeft:6}}>{money(periodDollars)}</span></span>}
+            </div>
           </div>
           <p className="hint" style={{marginTop:0, marginBottom:10}}>Tap a day to add or edit its counts. Payday {period.paydayLabel}.</p>
           <div className="week-grid">
@@ -1050,7 +1057,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
         </>
       )}
 
-      {emp && capped && !certifiedForPeriod && (
+      {emp && capped && !certifiedForPeriod && !audit && (
         <div className="cap-gate">
           <div className="cap-gate-title">⚠ Salary cap</div>
           <div className="cap-gate-body">
@@ -1062,13 +1069,18 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
           </label>
         </div>
       )}
+      {emp && capped && !certifiedForPeriod && audit && (
+        <div className="fixed-note" style={{marginTop:14, color:"var(--amber)"}}>
+          ⚠ Hasn't certified the {cap}-patient cap this period — you're editing as owner (audit).
+        </div>
+      )}
       {emp && capped && certifiedForPeriod && (
         <div className="fixed-note" style={{marginTop:14, color:"var(--accent-ink)"}}>
           ✓ Certified for {periodLabel} — logging additional patients.
         </div>
       )}
 
-      {emp && certifiedForPeriod && visibleTypes.length > 0 && (
+      {emp && gateOpen && visibleTypes.length > 0 && (
         <>
           <div style={{height:18}} />
           <label style={{marginBottom:10}}>
@@ -1099,13 +1111,13 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
         </>
       )}
 
-      {emp && certifiedForPeriod && visibleTypes.length === 0 && (
+      {emp && gateOpen && visibleTypes.length === 0 && (
         <div className="fixed-note" style={{marginTop:18}}>
           No counted pay types are set up for {emp.name} yet — you can still log an Other amount below, or ask the owner to set your rates.
         </div>
       )}
 
-      {emp && certifiedForPeriod && (
+      {emp && gateOpen && (
         <>
           <div style={{height:18}} />
           <div className="other-box">
