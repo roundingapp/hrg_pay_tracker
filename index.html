@@ -1212,12 +1212,13 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
 
       {emp && gateOpen && visibleTypes.length === 0 && (
         <div className="fixed-note" style={{marginTop:18}}>
-          No counted pay types are set up for {emp.name} yet — you can still log an Other amount below, or ask the owner to set your rates.
+          No counted pay types are set up for {emp.name} yet{audit ? " — you can still log an Other amount below" : ""} — ask the owner to set your rates.
         </div>
       )}
 
       {emp && gateOpen && (
         <>
+          {audit && (<>
           <div style={{height:18}} />
           <div className="other-box">
             <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
@@ -1249,6 +1250,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
               </>
             )}
           </div>
+          </>)}
 
           <div className="savebar">
             <div style={{alignSelf:"center", marginRight:"auto", fontSize:14, color:"var(--muted)"}}>
