@@ -24,7 +24,7 @@ const payForCounts = (counts, emp) => ALL_TYPES.reduce((s, t) => {
   return s + qty * rate;
 }, 0);
 const qtyRound = (key, v) => isDecimal(key) ? Math.round(v * 100) / 100 : Math.round(v);
-const QTY_MAX = { perdiem: 1, clinic_hr: 8, virtual_hr: 8, hosp_hr: 12 };
+const QTY_MAX = { perdiem: 1, clinic_hr: 9, virtual_hr: 8, hosp_hr: 12 };
 const capQty = (key, v) => QTY_MAX[key] != null ? Math.min(QTY_MAX[key], v) : v;
 const mergeSalaryDraft = (emps, sal) => emps.map((e) => ({ ...e, annualSalary: sal && sal[e.id] != null ? String(sal[e.id]) : "" }));
 const normU = (s) => String(s || "").trim().toLowerCase();

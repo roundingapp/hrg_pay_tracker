@@ -34,7 +34,7 @@ const payForCounts = (counts, emp) => ALL_TYPES.reduce((s,t) => {
 // round quantities: decimals to 2 places, counts to int
 const qtyRound = (key, v) => isDecimal(key) ? Math.round(v*100)/100 : Math.round(v);
 // per-day caps on how much of a pay type can be logged (undefined = uncapped)
-const QTY_MAX = { perdiem: 1, clinic_hr: 8, virtual_hr: 8, hosp_hr: 12 };
+const QTY_MAX = { perdiem: 1, clinic_hr: 9, virtual_hr: 8, hosp_hr: 12 };
 const capQty = (key, v) => QTY_MAX[key] != null ? Math.min(QTY_MAX[key], v) : v;
 // merge owner-only salaries {empId:annual} into a roster draft as an editable annualSalary field
 const mergeSalaryDraft = (emps, sal) => emps.map(e => ({ ...e, annualSalary: (sal && sal[e.id] != null) ? String(sal[e.id]) : "" }));
