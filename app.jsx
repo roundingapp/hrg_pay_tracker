@@ -487,12 +487,19 @@ function App() {
   // doc for managed staff, or their empId as a fallback) and load their certs so the view matches theirs.
   const startImpersonate = useCallback(async (emp) => {
     if (!emp) return;
-    const docId = (entries.find(e => e.empId === emp.id) || {})._uid || emp.id;
+    let docId;
+    if (emp.isManager) {
+      // a manager's entries live in HER own uid doc, tagged with each managed staffer's empId
+      const managedIds = new Set(employees.filter(e => e.managedBy === emp.id).map(e => e.id));
+      docId = (entries.find(e => managedIds.has(e.empId)) || {})._uid || emp.id;
+    } else {
+      docId = (entries.find(e => e.empId === emp.id) || {})._uid || emp.id;
+    }
     setImpersonateDoc(docId);
     setImpersonateCerts(await loadCertsForUid(docId));
     setImpersonate(emp);
     try { window.scrollTo(0, 0); } catch (e) {}
-  }, [entries]);
+  }, [entries, employees]);
   const exitImpersonate = useCallback(() => { setImpersonate(null); setImpersonateDoc(null); setImpersonateCerts({}); }, []);
   // owner edits on an employee's behalf — writes to THEIR entries doc (rules allow it: isOwner)
   const upsertForImpersonated = useCallback(async (entry) => {
@@ -552,14 +559,17 @@ function App() {
       {isOwner && impersonate && (
         <>
           <div className="impersonate-bar">
-            <span>👁 Viewing as <strong>{lastFirst(impersonate.name)}</strong> — edits save to their record (audit).</span>
+            <span>👁 Viewing as <strong>{lastFirst(impersonate.name)}</strong>{impersonate.isManager ? " (office manager) — their staff page" : " — edits save to their record (audit)."}</span>
             <button className="btn" onClick={exitImpersonate}>Exit view</button>
           </div>
-          <EntryView key={impersonate.id} emp={impersonate} entries={entries} upsertEntry={upsertForImpersonated}
-            certs={impersonateCerts} certifyPeriod={certifyForImpersonated} manualLocks={manualLocks}
-            audit={true} baseSalary={salaries[impersonate.id]}
-            empAdj={(() => { const o = {}; for (const [p, byEmp] of Object.entries(adjustments||{})) if (byEmp && byEmp[impersonate.id]) o[p] = byEmp[impersonate.id]; return o; })()}
-            showToast={showToast} />
+          {impersonate.isManager
+            ? <ManagerView key={impersonate.id} manager={impersonate} employees={employees} entries={entries}
+                upsertEntry={upsertForImpersonated} manualLocks={manualLocks} showToast={showToast} />
+            : <EntryView key={impersonate.id} emp={impersonate} entries={entries} upsertEntry={upsertForImpersonated}
+                certs={impersonateCerts} certifyPeriod={certifyForImpersonated} manualLocks={manualLocks}
+                audit={true} baseSalary={salaries[impersonate.id]}
+                empAdj={(() => { const o = {}; for (const [p, byEmp] of Object.entries(adjustments||{})) if (byEmp && byEmp[impersonate.id]) o[p] = byEmp[impersonate.id]; return o; })()}
+                showToast={showToast} />}
         </>
       )}
 
@@ -1052,7 +1062,7 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, tog
   const [refreshing, setRefreshing] = useState(false);
   const doRefresh = async () => { setRefreshing(true); try { await onRefresh(); } finally { setRefreshing(false); } };
   const syncLabel = syncedAt ? syncedAt.toLocaleTimeString([], { hour:"numeric", minute:"2-digit", second:"2-digit" }) : "—";
-  const viewable = employees.filter(e => !e.salaryOnly && !e.isManager)
+  const viewable = employees.filter(e => !e.salaryOnly)   // include office managers (view their staff page)
     .slice().sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
   return (
     <>
