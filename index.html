@@ -129,6 +129,16 @@
   .rate-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
   .rate-field label { font-size: 12px; }
   .rate-field .fixed-note { font-size: 11px; color: var(--faint); margin-top: 4px; }
+  /* compact employee editor layout */
+  .emp-section { margin-bottom: 14px; }
+  .emp-section + .emp-section { padding-top: 14px; border-top: 1px solid var(--line); }
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 560px) { .field-row { grid-template-columns: 1fr; } }
+  .field-row > div { min-width: 0; }
+  .check-cluster { display: flex; flex-wrap: wrap; gap: 12px 22px; }
+  .check-cluster label { display: flex; align-items: center; gap: 8px; cursor: pointer; margin: 0; font-weight: 500; color: var(--ink); }
+  .check-cluster input { width: auto; margin: 0; flex: 0 0 auto; }
+  .hint-sm { font-size: 12px; color: var(--faint); font-weight: 400; }
   .emp-rate-block .emp-head { display:flex; align-items:center; gap:10px; cursor:pointer; flex:1 1 auto; min-width:0; }
   .emp-rate-block .emp-chev { font-size:11px; color:var(--muted); flex:none; width:12px; text-align:center; }
   .emp-rate-block .emp-name-txt { font-weight:600; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:none; }
@@ -1632,121 +1642,98 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
           </div>
           {open && (
             <>
-              <div style={{margin:"12px 0 14px"}}>
-                <label>Name</label>
-                <input type="text" value={emp.name} onChange={e=>setName(emp.id, e.target.value)}
-                  style={{maxWidth:260, fontWeight:600}} />
-              </div>
-              <div style={{marginBottom:14}}>
-                <label>Role</label>
-                <input type="text" list="hrg-role-options" value={emp.role ?? ""}
-                  placeholder="e.g. NP, Scribe, MA" autoComplete="off"
-                  onChange={e=>setRole(emp.id, e.target.value)} style={{maxWidth:220}} />
-                <div className="fixed-note" style={{marginTop:4}}>Type a new role and it becomes a pick-list option for everyone.</div>
-              </div>
-              <div style={{marginBottom:14}}>
-                <label>Annual salary (W2 base — shown as biweekly in the roll-up)</label>
-                <input type="text" inputMode="numeric" value={emp.annualSalary ?? ""} placeholder="none"
-                  onChange={e=>setSalary(emp.id, e.target.value)} style={{maxWidth:180}} />
-                {Number(emp.annualSalary) > 0 && (
-                  <div className="fixed-note" style={{marginTop:4}}>Biweekly (÷26): <strong>{money(Number(emp.annualSalary)/26)}</strong></div>
-                )}
-              </div>
-              <div style={{marginBottom:14}}>
-                <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
-                  <input type="checkbox" style={{width:"auto", margin:0}}
-                    checked={!!emp.salaryOnly}
-                    onChange={e=>setSalaryOnly(emp.id, e.target.checked)} />
-                  <span style={{color:"var(--ink)", fontWeight:500}}>Salary only — no app login (payroll shows their Base only)</span>
-                </label>
-                <div className="fixed-note" style={{marginLeft:28, marginTop:4}}>
-                  For owners or staff who don't log anything — they show in the roll-up with their Base, nothing else.
-                </div>
-              </div>
-              {!emp.salaryOnly && (
-              <>
-              <div style={{marginBottom:14}}>
-                <label>Username (what they type to log in)</label>
-                <input type="text" value={emp.username ?? ""} autoComplete="off"
-                  placeholder="e.g. tiffany"
-                  onChange={e=>setUsername(emp.id, e.target.value)}
-                  style={{maxWidth:260, ...(emp.username && draft.filter(x=>normU(x.username)===normU(emp.username)).length>1 ? {borderColor:"var(--danger)"} : {})}} />
-                {emp.username && draft.filter(x=>normU(x.username)===normU(emp.username)).length>1 && (
-                  <div className="fixed-note" style={{color:"var(--danger)", marginTop:4}}>Duplicate — this username is used by someone else.</div>
-                )}
-              </div>
-              <div style={{marginBottom:14}}>
-                <label>Email (for login &amp; password reset)</label>
-                <input type="email" value={emp.email ?? ""} autoComplete="off"
-                  placeholder="name@houstonrenal.com"
-                  onChange={e=>setEmail(emp.id, e.target.value)}
-                  style={{maxWidth:300}} />
-              </div>
-              <div style={{marginBottom:14}}>
-                <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
-                  <input type="checkbox" style={{width:"auto", margin:0}}
-                    checked={!!emp.isManager}
-                    onChange={e=>setIsManager(emp.id, e.target.checked)} />
-                  <span style={{color:"var(--ink)", fontWeight:500}}>Office manager — enters hours for others, not paid here</span>
-                </label>
-                <div className="fixed-note" style={{marginLeft:28, marginTop:4}}>
-                  When on, this person logs in only to enter hours for the staff assigned to them — no pay of their own, and they don't appear in the roll-up.
-                </div>
-              </div>
-              {emp.isManager ? (
-                <div className="fixed-note">
-                  Assign staff to this manager by setting each person's <strong>Entered by</strong> (below their rates) to this name.
-                </div>
-              ) : (
-              <>
-              <div style={{marginBottom:14, paddingBottom:14, borderBottom:"1px solid var(--line)"}}>
-                <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
-                  <input type="checkbox" style={{width:"auto", margin:0}}
-                    checked={!!emp.fixedEligible}
-                    onChange={e=>setFixedElig(emp.id, e.target.checked)} />
-                  <span style={{color:"var(--ink)", fontWeight:500}}>
-                    Eligible for consults ($60) &amp; follow-ups ($30)
-                  </span>
-                </label>
-                <div className="fixed-note" style={{marginLeft:28, marginTop:4}}>
-                  Leave unchecked for clinic staff — those tiles won't show in their entry screen.
-                </div>
-              </div>
-              <div className="rate-grid">
-                {VARIABLE.map(t => (
-                  <div className="rate-field" key={t.key}>
-                    <label>{t.label} ($/{t.unit})</label>
-                    <input type="number" min="0" step="0.01" placeholder="0"
-                      value={emp.rates?.[t.key] ?? ""}
-                      onChange={e=>setRate(emp.id, t.key, e.target.value)} />
+              <div className="emp-section" style={{marginTop:12}}>
+                <div className="field-row">
+                  <div>
+                    <label>Name</label>
+                    <input type="text" value={emp.name} onChange={e=>setName(emp.id, e.target.value)} style={{fontWeight:600}} />
                   </div>
-                ))}
+                  <div>
+                    <label>Role</label>
+                    <input type="text" list="hrg-role-options" value={emp.role ?? ""} placeholder="e.g. NP, Scribe, MA"
+                      autoComplete="off" onChange={e=>setRole(emp.id, e.target.value)} />
+                  </div>
+                </div>
+                {!emp.salaryOnly && (
+                  <div className="field-row" style={{marginTop:12}}>
+                    <div>
+                      <label>Username</label>
+                      <input type="text" value={emp.username ?? ""} autoComplete="off" placeholder="e.g. tiffany"
+                        onChange={e=>setUsername(emp.id, e.target.value)}
+                        style={emp.username && draft.filter(x=>normU(x.username)===normU(emp.username)).length>1 ? {borderColor:"var(--danger)"} : null} />
+                      {emp.username && draft.filter(x=>normU(x.username)===normU(emp.username)).length>1 && (
+                        <div className="fixed-note" style={{color:"var(--danger)", marginTop:4}}>Duplicate username.</div>
+                      )}
+                    </div>
+                    <div>
+                      <label>Email</label>
+                      <input type="email" value={emp.email ?? ""} autoComplete="off" placeholder="name@houstonrenal.com"
+                        onChange={e=>setEmail(emp.id, e.target.value)} />
+                    </div>
+                  </div>
+                )}
               </div>
-              <div style={{marginTop:14, paddingTop:14, borderTop:"1px solid var(--line)"}}>
-                <label>Patient cap (covered by salary)</label>
-                <input type="text" inputMode="numeric" value={emp.patientCap ?? ""}
-                  placeholder="none"
-                  onChange={e=>setCap(emp.id, e.target.value)}
-                  style={{maxWidth:140}} />
-                <div className="fixed-note" style={{marginTop:4}}>
-                  Set a number (e.g. 50) for salaried staff whose first N patients are covered. They certify once each pay period before logging extras; changing the number makes them re-certify. Leave blank for no cap.
+
+              <div className="emp-section">
+                <div className="check-cluster">
+                  <label><input type="checkbox" checked={!!emp.salaryOnly} onChange={e=>setSalaryOnly(emp.id, e.target.checked)} /> Salary only <span className="hint-sm">no login · Base only</span></label>
+                  {!emp.salaryOnly && (
+                    <label><input type="checkbox" checked={!!emp.isManager} onChange={e=>setIsManager(emp.id, e.target.checked)} /> Office manager <span className="hint-sm">enters for others</span></label>
+                  )}
+                  {!emp.salaryOnly && !emp.isManager && (
+                    <label><input type="checkbox" checked={!!emp.fixedEligible} onChange={e=>setFixedElig(emp.id, e.target.checked)} /> Consults + follow-ups <span className="hint-sm">$60 / $30</span></label>
+                  )}
                 </div>
               </div>
-              <div style={{marginTop:14, paddingTop:14, borderTop:"1px solid var(--line)"}}>
-                <label>Entered by</label>
-                <select value={emp.managedBy || ""} onChange={e=>setManagedBy(emp.id, e.target.value)} style={{maxWidth:300}}>
-                  <option value="">Self — this person logs in and enters their own</option>
-                  {draft.filter(m => m.isManager && m.id !== emp.id).map(m => (
-                    <option key={m.id} value={m.id}>{m.name.trim() || "(unnamed manager)"}</option>
-                  ))}
-                </select>
-                <div className="fixed-note" style={{marginTop:4}}>
-                  Pick an office manager to have them enter this person's hours. That person then can't log in themselves.
+
+              <div className="emp-section">
+                <div className="field-row">
+                  <div>
+                    <label>Annual salary <span className="hint-sm">W2 base</span></label>
+                    <input type="text" inputMode="numeric" value={emp.annualSalary ?? ""} placeholder="none"
+                      onChange={e=>setSalary(emp.id, e.target.value)} />
+                    {Number(emp.annualSalary) > 0 && (
+                      <div className="fixed-note" style={{marginTop:4}}>{money(Number(emp.annualSalary)/26)} biweekly</div>
+                    )}
+                  </div>
+                  {!emp.salaryOnly && !emp.isManager && (
+                    <div>
+                      <label>Patient cap <span className="hint-sm">salary-covered</span></label>
+                      <input type="text" inputMode="numeric" value={emp.patientCap ?? ""} placeholder="none"
+                        onChange={e=>setCap(emp.id, e.target.value)} />
+                      {Number(emp.patientCap) > 0 && (
+                        <div className="fixed-note" style={{marginTop:4}}>Certifies once/period; changing it re-prompts.</div>
+                      )}
+                    </div>
+                  )}
                 </div>
+                {!emp.salaryOnly && !emp.isManager && (
+                  <>
+                    <div className="rate-grid" style={{marginTop:12}}>
+                      {VARIABLE.map(t => (
+                        <div className="rate-field" key={t.key}>
+                          <label>{t.label} ($/{t.unit})</label>
+                          <input type="number" min="0" step="0.01" placeholder="0"
+                            value={emp.rates?.[t.key] ?? ""}
+                            onChange={e=>setRate(emp.id, t.key, e.target.value)} />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{marginTop:12}}>
+                      <label>Entered by</label>
+                      <select value={emp.managedBy || ""} onChange={e=>setManagedBy(emp.id, e.target.value)} style={{maxWidth:340}}>
+                        <option value="">Self — logs in &amp; enters their own</option>
+                        {draft.filter(m => m.isManager && m.id !== emp.id).map(m => (
+                          <option key={m.id} value={m.id}>Entered by {m.name.trim() || "(unnamed manager)"}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
+                {!emp.salaryOnly && emp.isManager && (
+                  <div className="hint-sm" style={{marginTop:6}}>Assign staff to this manager via each person's <strong>Entered by</strong> field.</div>
+                )}
               </div>
-              </>
-              )}
-              </>)}
             </>
           )}
         </div>
