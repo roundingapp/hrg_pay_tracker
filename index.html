@@ -274,6 +274,9 @@ const VARIABLE = [
   { key: "hosp_hr",    label: "In-hospital hourly", unit: "hrs",   decimal: true },
 ];
 const ALL_TYPES = [...FIXED, ...VARIABLE];
+// Employee-entered "Other" one-off amounts are deactivated (abuse vector). All Other logic stays
+// wired (build/save/load/totals) and the roll-up Other column remains — flip to true to re-enable.
+const OTHER_ENABLED = false;
 const isFixed = key => FIXED.some(f => f.key === key);
 const isDecimal = key => VARIABLE.some(v => v.key === key && v.decimal);
 // dollar value of a counts map for a given employee (per-emp rates for variable types)
@@ -1212,13 +1215,13 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
 
       {emp && gateOpen && visibleTypes.length === 0 && (
         <div className="fixed-note" style={{marginTop:18}}>
-          No counted pay types are set up for {emp.name} yet{audit ? " — you can still log an Other amount below" : ""} — ask the owner to set your rates.
+          No counted pay types are set up for {emp.name} yet{OTHER_ENABLED ? " — you can still log an Other amount below" : ""} — ask the owner to set your rates.
         </div>
       )}
 
       {emp && gateOpen && (
         <>
-          {audit && (<>
+          {OTHER_ENABLED && (<>
           <div style={{height:18}} />
           <div className="other-box">
             <label style={{display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:0}}>
