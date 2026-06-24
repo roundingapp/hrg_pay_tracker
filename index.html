@@ -183,6 +183,8 @@
   .day-cell.locked { background:var(--amber-soft); }
   .day-cell.locked .dnum { color:var(--amber); }
   .day-cell.selected { border-color:var(--accent); background:var(--accent-soft); box-shadow:0 0 0 2px var(--accent-soft); }
+  .day-cell.future { opacity:.4; cursor:default; background:#fafafa; }
+  .day-cell.future:hover { border-color:var(--line); }
   @media (max-width:600px){ .day-cell{ min-height:52px; padding:6px 2px; gap:2px; } .day-cell .dnum{font-size:13px;} .day-cell .damt,.day-cell .dempty{font-size:11px;} .week-grid{gap:4px;} }
   .other-box { border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; background:#fcfbf8; }
   .other-fields { display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; }
@@ -446,6 +448,21 @@ async function saveSalaries(map) {
     return true;
   } catch (e) { console.error("salaries write failed", e); return false; }
 }
+// a person's OWN salary, mirrored into their own entries doc so THEY can see their Base (owner pushes it)
+async function loadMySalary(uid) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", uid);
+    const snap = await window._fs.getDoc(ref);
+    return (snap.exists() && snap.data() && Number(snap.data().salary)) || 0;
+  } catch (e) { return 0; }
+}
+async function saveMySalary(uid, annual) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", uid);
+    await window._fs.setDoc(ref, { salary: Number(annual) || 0 }, { merge: true });
+    return true;
+  } catch (e) { console.error("my-salary write failed", e); return false; }
+}
 
 /* ---------- public roster of valid usernames (collection "public", doc "usernames") ----------
    Publicly readable (no names/rates — just the list of active usernames) so the login screen
@@ -527,6 +544,7 @@ function App() {
   const [entries, setEntries] = useState([]);     // owner: everyone's (tagged _uid); NP: just theirs
   const [certs, setCerts] = useState({});         // NP's per-period cap certifications {periodIdx:{cap,at}}
   const [salaries, setSalaries] = useState({});   // owner-only annual salaries {empId: annual}
+  const [mySalary, setMySalary] = useState(0);    // the signed-in NP's own salary (from their own doc)
   const [impersonate, setImpersonate] = useState(null);       // owner "view as" target employee (or null)
   const [impersonateDoc, setImpersonateDoc] = useState(null); // the entries doc that employee's data lives in
   const [impersonateCerts, setImpersonateCerts] = useState({});
@@ -559,6 +577,7 @@ function App() {
     setEntries(isOwnerUser(u) ? await loadAllEntries() : await loadEntriesForUid(u.uid));
     setCerts(isOwnerUser(u) ? {} : await loadCertsForUid(u.uid));
     setSalaries(isOwnerUser(u) ? await loadSalaries() : {});
+    setMySalary(isOwnerUser(u) ? 0 : await loadMySalary(u.uid));
   }, []);
 
   // watch auth state; (re)load data whenever the signed-in user changes
@@ -588,7 +607,12 @@ function App() {
   const persistSalaries = useCallback(async (map) => {
     setSalaries(map);
     await saveSalaries(map);
-  }, []);
+    // mirror each person's own salary into their own entries doc so they can see their Base
+    for (const [empId, annual] of Object.entries(map)) {
+      const docId = (entries.find(e => e.empId === empId) || {})._uid;
+      if (docId) await saveMySalary(docId, annual);
+    }
+  }, [entries]);
   const toggleLock = useCallback(async (periodIndex) => {
     const latest = await sGet("manualLocks", []);
     const set = new Set(Array.isArray(latest) ? latest : []);
@@ -713,7 +737,7 @@ function App() {
             ? <ManagerView manager={myEmp} employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast} />
             : myEmp.managedBy
               ? <div className="card"><div className="empty">Your hours are entered for you by the office manager — there's nothing to log here. Reach out to the office if something looks off.</div></div>
-              : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} showToast={showToast} />
+              : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} baseSalary={mySalary} showToast={showToast} />
       )}
 
       <div className={"toast"+(toast?" show":"")}>{toast}</div>
@@ -908,7 +932,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const dateLocked = date ? dateInLockedPeriod(date, manualLocks) : false;
 
   // ----- pay-period grid -----
-  const maxPeriodIdx = currentPeriodIndex() + 1;            // can log the upcoming period, not the far future
+  const maxPeriodIdx = currentPeriodIndex();                // can't advance into a future (un-happened) period
   const period = periodByIndex(periodIdx);
   const periodDays = Array.from({length: PERIOD_LEN_DAYS}, (_, i) => fmtISO(addDays(parseDate(period.start), i)));
   const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -991,6 +1015,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     return { entry };
   };
   const saveEntry = async () => {
+    if (date > todayISO()) { clearEntryDirty(); return; }   // never save a future date
     const r = buildEntry();
     if (r.incomplete) return;                       // wait until the Other line is complete (stay dirty)
     if (r.skip) { clearEntryDirty(); return; }       // nothing to save
@@ -1034,13 +1059,16 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
             {periodDays.map(iso => {
               const logged = dayEntries(iso).length > 0;
               const locked = dateInLockedPeriod(iso, manualLocks);
+              const future = iso > todayISO();
               const cls = "day-cell"
                 + (iso===date ? " selected" : "")
                 + (logged ? " logged" : "")
                 + (iso===todayISO() ? " today" : "")
-                + (locked ? " locked" : "");
+                + (locked ? " locked" : "")
+                + (future ? " future" : "");
               return (
-                <div className={cls} key={iso} onClick={()=>{ flushEntry(); setDate(iso); }}>
+                <div className={cls} key={iso} title={future ? "Can't log a future date" : undefined}
+                  onClick={()=>{ if (future) return; flushEntry(); setDate(iso); }}>
                   <div className="dnum">{parseDate(iso).getDate()}{locked ? " 🔒" : ""}</div>
                   {logged
                     ? <div className="damt">{money(dayDollars(iso))}</div>
