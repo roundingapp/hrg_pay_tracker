@@ -736,7 +736,7 @@ function App() {
           : myEmp.isManager
             ? <ManagerView manager={myEmp} employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast} />
             : myEmp.managedBy
-              ? <div className="card"><div className="empty">Your hours are entered for you by the office manager — there's nothing to log here. Reach out to the office if something looks off.</div></div>
+              ? <div className="card"><div className="empty">Your hours are entered for you — there's nothing to log here. Reach out to the office if something looks off.</div></div>
               : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} baseSalary={mySalary} showToast={showToast} />
       )}
 
@@ -1658,7 +1658,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       if (emp.fixedEligible) bits.push("consults+FU");
       if (nRates) bits.push(nRates + " rate" + (nRates===1?"":"s"));
       if (Number(emp.patientCap) > 0) bits.push("cap " + Math.round(Number(emp.patientCap)));
-      if (emp.managedBy) bits.push("manager-entered");
+      if (emp.managedBy) bits.push(emp.managedBy === "ADMIN" ? "admin-entered" : "manager-entered");
     }
     if (Number(emp.annualSalary) > 0) bits.push("$" + Math.round(Number(emp.annualSalary)/1000) + "k");
     if (emp.role && String(emp.role).trim()) bits.unshift(String(emp.role).trim());
@@ -1836,6 +1836,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                       <label>Entered by</label>
                       <select value={emp.managedBy || ""} onChange={e=>setManagedBy(emp.id, e.target.value)} style={{maxWidth:340}}>
                         <option value="">Self — logs in &amp; enters their own</option>
+                        <option value="ADMIN">Administrator — you enter their hours</option>
                         {draft.filter(m => m.isManager && m.id !== emp.id).map(m => (
                           <option key={m.id} value={m.id}>Entered by {lastFirst(m.name) || "(unnamed manager)"}</option>
                         ))}
