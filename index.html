@@ -208,6 +208,8 @@
   .rollup-table th, .rollup-table td.num { text-align:center; }
   .rollup-table th:first-child { text-align:left; }
   .rollup-table td.num { min-width:82px; }
+  .rollup-table td.num.cnt { min-width:46px; }                  /* count columns max ~3 digits */
+  .rollup-table .cell-in.cnt-in { min-width:46px; padding:4px 2px; }
 </style>
 </head>
 <body>
@@ -267,7 +269,6 @@ const FIXED = [
 const VARIABLE = [
   { key: "clinic_pts", label: "Clinic Patients",    unit: "patient", decimal: false },
   { key: "perdiem",    label: "Per diem",           unit: "days",  decimal: false },
-  { key: "pernote",    label: "Per note",           unit: "notes", decimal: false },
   { key: "clinic_hr",  label: "Clinic hourly",      unit: "hrs",   decimal: true },
   { key: "virtual_hr", label: "Virtual hourly",     unit: "hrs",   decimal: true },
   { key: "hosp_hr",    label: "In-hospital hourly", unit: "hrs",   decimal: true },
@@ -1440,9 +1441,9 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     </td>
   );
   const cntCell = (r, t) => (
-    <td className="num">
+    <td className="num cnt">
       {editable
-        ? <input className="cell-in" type="text" inputMode="numeric"
+        ? <input className="cell-in cnt-in" type="text" inputMode="numeric"
             value={(r.adj.counts && has(r.adj.counts[t])) ? r.adj.counts[t] : (r.counts[t] || "")}
             onChange={e=>setAdj(r.emp.id, "count."+t, e.target.value)} />
         : (r.counts[t] || "")}
@@ -1469,7 +1470,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     : [];
 
   const exportADP = () => {
-    const header = ["Co Code","Batch ID","File #","Employee Name","Other Earnings Code","Other Earnings Amount","Consults","Follow-ups","Clinic Patients","Per Diem","Per Note","Clinic Hrs","Virtual Hrs","In-Hospital Hrs","Period Start","Period End","Payday"];
+    const header = ["Co Code","Batch ID","File #","Employee Name","Other Earnings Code","Other Earnings Amount","Consults","Follow-ups","Clinic Patients","Per Diem","Clinic Hrs","Virtual Hrs","In-Hospital Hrs","Period Start","Period End","Payday"];
     const lines = [header.join(",")];
     const payday = mode === "period" ? selPeriod.payday : "";
     rows.filter(r=>r.pay>0).forEach((r) => {
@@ -1477,7 +1478,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
       const cell = v => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
       lines.push([
         "", "", "", r.emp.name, "Other", (Math.round(r.pay*100)/100).toFixed(2),
-        c.consults, c.followups, c.clinic_pts, c.perdiem, c.pernote, c.clinic_hr, c.virtual_hr, c.hosp_hr,
+        c.consults, c.followups, c.clinic_pts, c.perdiem, c.clinic_hr, c.virtual_hr, c.hosp_hr,
         winFrom||"", winTo||"", payday
       ].map(cell).join(","));
     });
@@ -1603,7 +1604,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
               {sortTh("bonus", "Bonus", true)}{sortTh("reimb", "Reimburse", true)}
               {sortTh("consults", "Cons", true)}{sortTh("followups", "F/U", true)}
               {sortTh("clinic_pts", "Clinic pts", true)}
-              {sortTh("perdiem", "Per diem", true)}{sortTh("pernote", "Per note", true)}
+              {sortTh("perdiem", "Per diem", true)}
               {sortTh("clinic_hr", "Clinic hr", true)}{sortTh("virtual_hr", "Virtual hr", true)}{sortTh("hosp_hr", "Hosp hr", true)}
               {sortTh("other", "Other", true)}
               <th style={{whiteSpace:"nowrap"}}>Notes</th>
@@ -1622,7 +1623,6 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
                 {cntCell(r, "followups")}
                 {cntCell(r, "clinic_pts")}
                 {cntCell(r, "perdiem")}
-                {cntCell(r, "pernote")}
                 {cntCell(r, "clinic_hr")}
                 {cntCell(r, "virtual_hr")}
                 {cntCell(r, "hosp_hr")}
@@ -1644,7 +1644,6 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
               <td className="num">{rows.reduce((s,r)=>s+r.counts.followups,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.clinic_pts,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.perdiem,0)}</td>
-              <td className="num">{rows.reduce((s,r)=>s+r.counts.pernote,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.clinic_hr,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.virtual_hr,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.hosp_hr,0)}</td>
