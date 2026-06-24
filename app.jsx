@@ -1052,7 +1052,7 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, tog
         <div style={{display:"flex", alignItems:"center", gap:12, flexWrap:"wrap"}}>
           <div style={{display:"flex", alignItems:"center", gap:8, fontSize:12, color:"var(--muted)"}}>
             <span title="Data is pulled live from the server on every load, on a 60s heartbeat, and whenever you return to the tab.">Synced {syncLabel}</span>
-            <button className="btn btn-ghost" style={{padding:"5px 12px", fontSize:13}} onClick={doRefresh} disabled={refreshing}>{refreshing ? "Refreshing…" : "↻ Refresh"}</button>
+            <button className="btn btn-ghost" title="Refresh" aria-label="Refresh" style={{padding:"4px 10px", fontSize:16, lineHeight:1}} onClick={doRefresh} disabled={refreshing}>↻</button>
           </div>
           {onViewAs && (
             <select value="" onChange={e=>{ const emp = viewable.find(x=>x.id===e.target.value); if (emp) onViewAs(emp); }} style={{maxWidth:240}}>
