@@ -220,7 +220,7 @@
 <!-- ============================================================= -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getFirestore, doc, getDoc, setDoc, collection, getDocs }
+  import { getFirestore, initializeFirestore, doc, getDoc, setDoc, collection, getDocs }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail, sendPasswordResetEmail }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -237,7 +237,9 @@
   // ↑↑↑↑↑  (you get this from the Firebase website — the walkthrough shows you where)  ↑↑↑↑↑
 
   const app = initializeApp(firebaseConfig);
-  window._db = getFirestore(app);
+  // auto-detect long-polling: use it immediately on networks that block WebChannel streaming,
+  // instead of waiting for the stream to time out and fall back (big stall on VPN/mobile/corp nets)
+  window._db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
   window._fs = { doc, getDoc, setDoc, collection, getDocs };
   window._auth = getAuth(app);
   window._authfns = { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail, sendPasswordResetEmail };
@@ -250,6 +252,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
 
-<script defer src="app.js?v=73ee7012"></script>
+<script defer src="app.js?v=449b718a"></script>
 </body>
 </html>
