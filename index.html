@@ -193,6 +193,9 @@
   .cap-gate-check input { width:auto; margin:2px 0 0; flex:0 0 auto; }
   .cap-gate-check span { color:var(--ink); font-weight:500; }
   .manager-picker { display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; }
+  .impersonate-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:var(--ink); color:#fff; padding:11px 16px; border-radius:var(--radius); margin-bottom:14px; font-size:14px; }
+  .impersonate-bar strong { color:#fff; }
+  .impersonate-bar .btn { background:#fff; color:var(--ink); border:none; flex:0 0 auto; }
 </style>
 </head>
 <body>
@@ -524,6 +527,9 @@ function App() {
   const [entries, setEntries] = useState([]);     // owner: everyone's (tagged _uid); NP: just theirs
   const [certs, setCerts] = useState({});         // NP's per-period cap certifications {periodIdx:{cap,at}}
   const [salaries, setSalaries] = useState({});   // owner-only annual salaries {empId: annual}
+  const [impersonate, setImpersonate] = useState(null);       // owner "view as" target employee (or null)
+  const [impersonateDoc, setImpersonateDoc] = useState(null); // the entries doc that employee's data lives in
+  const [impersonateCerts, setImpersonateCerts] = useState({});
   const [manualLocks, setManualLocks] = useState([]);
   const [toast, setToast] = useState("");
 
@@ -614,6 +620,39 @@ function App() {
     await saveCertForUid(uid, periodIdx, cap, at);
   }, [uid]);
 
+  // owner "view as employee": find which entries doc their data lives in (their own uid, the manager's
+  // doc for managed staff, or their empId as a fallback) and load their certs so the view matches theirs.
+  const startImpersonate = useCallback(async (emp) => {
+    if (!emp) return;
+    const docId = (entries.find(e => e.empId === emp.id) || {})._uid || emp.id;
+    setImpersonateDoc(docId);
+    setImpersonateCerts(await loadCertsForUid(docId));
+    setImpersonate(emp);
+    try { window.scrollTo(0, 0); } catch (e) {}
+  }, [entries]);
+  const exitImpersonate = useCallback(() => { setImpersonate(null); setImpersonateDoc(null); setImpersonateCerts({}); }, []);
+  // owner edits on an employee's behalf — writes to THEIR entries doc (rules allow it: isOwner)
+  const upsertForImpersonated = useCallback(async (entry) => {
+    const docId = impersonateDoc || (impersonate && impersonate.id);
+    if (!docId) return false;
+    const latest = await loadEntriesForUid(docId);
+    const rest = latest.filter(e => !(e.empId === entry.empId && e.date === entry.date));
+    const hasCounts = entry.counts && Object.values(entry.counts).some(v => Number(v) > 0);
+    const hasOther = entry.other && Number(entry.other.amount) > 0;
+    const hasAny = hasCounts || hasOther;
+    const next = hasAny ? [...rest, entry] : rest;
+    await saveEntriesForUid(docId, next);
+    setEntries(await loadAllEntries());
+    return hasAny;
+  }, [impersonate, impersonateDoc]);
+  const certifyForImpersonated = useCallback(async (periodIdx, cap) => {
+    const docId = impersonateDoc || (impersonate && impersonate.id);
+    if (!docId) return;
+    const at = new Date().toISOString();
+    setImpersonateCerts(c => ({ ...c, [String(periodIdx)]: { cap, at } }));
+    await saveCertForUid(docId, periodIdx, cap, at);
+  }, [impersonate, impersonateDoc]);
+
   // owner deletes an entry from whichever NP doc it came from (tagged _uid on merge)
   const deleteOwnerEntry = useCallback(async (entry) => {
     if (!entry || !entry._uid) return;
@@ -646,10 +685,23 @@ function App() {
       {/* signed out → login (NP username, or owner email) */}
       {!authUser && <LoginScreen showToast={showToast} />}
 
+      {/* owner "view as" → that employee's dashboard, editable, with a return bar */}
+      {isOwner && impersonate && (
+        <>
+          <div className="impersonate-bar">
+            <span>👁 Viewing as <strong>{lastFirst(impersonate.name)}</strong> — edits save to their record (audit).</span>
+            <button className="btn" onClick={exitImpersonate}>Exit view</button>
+          </div>
+          <EntryView key={impersonate.id} emp={impersonate} entries={entries} upsertEntry={upsertForImpersonated}
+            certs={impersonateCerts} certifyPeriod={certifyForImpersonated} manualLocks={manualLocks} showToast={showToast} />
+        </>
+      )}
+
       {/* signed in as owner → full panel */}
-      {isOwner && (
+      {isOwner && !impersonate && (
         <OwnerView employees={employees} entries={entries} salaries={salaries} manualLocks={manualLocks} toggleLock={toggleLock}
-          persistEmployees={persistEmployees} persistSalaries={persistSalaries} deleteEntry={deleteOwnerEntry} showToast={showToast} />
+          persistEmployees={persistEmployees} persistSalaries={persistSalaries} deleteEntry={deleteOwnerEntry}
+          onViewAs={startImpersonate} showToast={showToast} />
       )}
 
       {/* signed in as staff/manager → scoped entry screen */}
@@ -1103,14 +1155,24 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
 }
 
 /* ---------- owner view ---------- */
-function OwnerView({ employees, entries, salaries, manualLocks, toggleLock, persistEmployees, persistSalaries, deleteEntry, showToast }) {
+function OwnerView({ employees, entries, salaries, manualLocks, toggleLock, persistEmployees, persistSalaries, deleteEntry, onViewAs, showToast }) {
   const [sub, setSub] = useState("rollup");
+  const viewable = employees.filter(e => !e.salaryOnly && !e.isManager)
+    .slice().sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
   return (
     <>
-      <div className="tabs" style={{marginTop:"-6px"}}>
-        <button className={"tab"+(sub==="rollup"?" active":"")} onClick={()=>setSub("rollup")}>Roll-up</button>
-        <button className={"tab"+(sub==="rates"?" active":"")} onClick={()=>setSub("rates")}>Employees &amp; rates</button>
-        <button className={"tab"+(sub==="entries"?" active":"")} onClick={()=>setSub("entries")}>All entries</button>
+      <div style={{display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", justifyContent:"space-between", marginTop:"-6px", marginBottom:14}}>
+        <div className="tabs" style={{margin:0}}>
+          <button className={"tab"+(sub==="rollup"?" active":"")} onClick={()=>setSub("rollup")}>Roll-up</button>
+          <button className={"tab"+(sub==="rates"?" active":"")} onClick={()=>setSub("rates")}>Employees &amp; rates</button>
+          <button className={"tab"+(sub==="entries"?" active":"")} onClick={()=>setSub("entries")}>All entries</button>
+        </div>
+        {onViewAs && (
+          <select value="" onChange={e=>{ const emp = viewable.find(x=>x.id===e.target.value); if (emp) onViewAs(emp); }} style={{maxWidth:240}}>
+            <option value="">👁 View as employee…</option>
+            {viewable.map(e => <option key={e.id} value={e.id}>{lastFirst(e.name)}</option>)}
+          </select>
+        )}
       </div>
       {sub==="rollup"  && <Rollup employees={employees} entries={entries} salaries={salaries} manualLocks={manualLocks} toggleLock={toggleLock} showToast={showToast} />}
       {sub==="rates"   && <Rates employees={employees} salaries={salaries} persistEmployees={persistEmployees} persistSalaries={persistSalaries} showToast={showToast} />}
