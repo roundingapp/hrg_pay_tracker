@@ -179,8 +179,9 @@ async function loadAllEntries() {
     const snap = await window._fs.getDocs(window._fs.collection(window._db, "paytracker_entries"));
     const all = [];
     snap.forEach((d) => {
-      if (d.id === SALARY_DOC) return;
-      const v = d.data() && d.data().value || [];
+      if (d.id === SALARY_DOC || d.id === ADJ_DOC) return;
+      const v = d.data() && d.data().value;
+      if (!Array.isArray(v)) return;
       v.forEach((e) => all.push({ ...e, _uid: d.id }));
     });
     return all;
@@ -328,6 +329,7 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, sh
 }
 function App() {
   const [loaded, setLoaded] = useState(false);
+  const [syncedAt, setSyncedAt] = useState(null);
   const [authUser, setAuthUser] = useState(void 0);
   const [tab, setTab] = useState("entry");
   const [employees, setEmployees] = useState([]);
@@ -379,6 +381,7 @@ function App() {
     setMySalary(mySalary2);
     setAdjustments(adjustments2);
     setMyAdj(myAdj2);
+    setSyncedAt(/* @__PURE__ */ new Date());
   }, []);
   useEffect(() => {
     if (!window._auth || !window._authfns) {
@@ -393,11 +396,20 @@ function App() {
     });
   }, [refresh]);
   useEffect(() => {
-    const onFocus = () => {
-      if (window._auth && window._auth.currentUser) refresh();
+    const pull = () => {
+      if (window._auth && window._auth.currentUser && !document.hidden) refresh();
     };
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    const onVis = () => {
+      if (!document.hidden) pull();
+    };
+    window.addEventListener("focus", pull);
+    document.addEventListener("visibilitychange", onVis);
+    const id = setInterval(pull, 6e4);
+    return () => {
+      window.removeEventListener("focus", pull);
+      document.removeEventListener("visibilitychange", onVis);
+      clearInterval(id);
+    };
   }, [refresh]);
   const persistEmployees = useCallback(async (next) => {
     setEmployees(next);
@@ -535,6 +547,8 @@ function App() {
       persistAdjustments,
       deleteEntry: deleteOwnerEntry,
       onViewAs: startImpersonate,
+      syncedAt,
+      onRefresh: refresh,
       showToast
     }
   ), authUser && !isOwner && (!myEmp ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees & rates, then sign out and back in.")) : myEmp.isManager ? /* @__PURE__ */ React.createElement(ManagerView, { manager: myEmp, employees, entries, upsertEntry, manualLocks, showToast }) : myEmp.managedBy ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "Your hours are entered for you \u2014 there's nothing to log here. Reach out to the office if something looks off.")) : /* @__PURE__ */ React.createElement(EntryView, { emp: myEmp, entries, upsertEntry, certs, certifyPeriod, manualLocks, baseSalary: mySalary, empAdj: myAdj, showToast })), /* @__PURE__ */ React.createElement("div", { className: "toast" + (toast ? " show" : "") }, toast));
@@ -919,13 +933,23 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     markEntryDirty();
   } }, "Clear"))));
 }
-function OwnerView({ employees, entries, salaries, adjustments, manualLocks, toggleLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, onViewAs, showToast }) {
+function OwnerView({ employees, entries, salaries, adjustments, manualLocks, toggleLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, onViewAs, syncedAt, onRefresh, showToast }) {
   const [sub, setSub] = useState("rollup");
+  const [refreshing, setRefreshing] = useState(false);
+  const doRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  const syncLabel = syncedAt ? syncedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" }) : "\u2014";
   const viewable = employees.filter((e) => !e.salaryOnly && !e.isManager).slice().sort((a, b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", marginTop: "-6px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "tabs", style: { margin: 0 } }, /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "rollup" ? " active" : ""), onClick: () => setSub("rollup") }, "Roll-up"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "rates" ? " active" : ""), onClick: () => setSub("rates") }, "Employees & rates"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "entries" ? " active" : ""), onClick: () => setSub("entries") }, "All entries")), onViewAs && /* @__PURE__ */ React.createElement("select", { value: "", onChange: (e) => {
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", marginTop: "-6px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "tabs", style: { margin: 0 } }, /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "rollup" ? " active" : ""), onClick: () => setSub("rollup") }, "Roll-up"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "rates" ? " active" : ""), onClick: () => setSub("rates") }, "Employees & rates"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "entries" ? " active" : ""), onClick: () => setSub("entries") }, "All entries")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" } }, /* @__PURE__ */ React.createElement("span", { title: "Data is pulled live from the server on every load, on a 60s heartbeat, and whenever you return to the tab." }, "Synced ", syncLabel), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: { padding: "5px 12px", fontSize: 13 }, onClick: doRefresh, disabled: refreshing }, refreshing ? "Refreshing\u2026" : "\u21BB Refresh")), onViewAs && /* @__PURE__ */ React.createElement("select", { value: "", onChange: (e) => {
     const emp = viewable.find((x) => x.id === e.target.value);
     if (emp) onViewAs(emp);
-  }, style: { maxWidth: 240 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u{1F441} View as employee\u2026"), viewable.map((e) => /* @__PURE__ */ React.createElement("option", { key: e.id, value: e.id }, lastFirst(e.name))))), sub === "rollup" && /* @__PURE__ */ React.createElement(Rollup, { employees, entries, salaries, adjustments, persistAdjustments, manualLocks, toggleLock, showToast }), sub === "rates" && /* @__PURE__ */ React.createElement(Rates, { employees, salaries, persistEmployees, persistSalaries, showToast }), sub === "entries" && /* @__PURE__ */ React.createElement(AllEntries, { employees, entries, deleteEntry, showToast }));
+  }, style: { maxWidth: 240 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u{1F441} View as employee\u2026"), viewable.map((e) => /* @__PURE__ */ React.createElement("option", { key: e.id, value: e.id }, lastFirst(e.name)))))), sub === "rollup" && /* @__PURE__ */ React.createElement(Rollup, { employees, entries, salaries, adjustments, persistAdjustments, manualLocks, toggleLock, showToast }), sub === "rates" && /* @__PURE__ */ React.createElement(Rates, { employees, salaries, persistEmployees, persistSalaries, showToast }), sub === "entries" && /* @__PURE__ */ React.createElement(AllEntries, { employees, entries, deleteEntry, showToast }));
 }
 function payForEntry(emp, entry) {
   let total = 0;

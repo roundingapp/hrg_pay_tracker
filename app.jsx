@@ -182,8 +182,9 @@ async function loadAllEntries() {
     const snap = await window._fs.getDocs(window._fs.collection(window._db, "paytracker_entries"));
     const all = [];
     snap.forEach(d => {
-      if (d.id === SALARY_DOC) return;   // the salaries doc lives here too — skip it
-      const v = (d.data() && d.data().value) || [];
+      if (d.id === SALARY_DOC || d.id === ADJ_DOC) return;   // owner-only object-valued docs live here too — skip
+      const v = d.data() && d.data().value;
+      if (!Array.isArray(v)) return;     // defensive: only per-NP entry arrays (never an object-valued doc)
       v.forEach(e => all.push({ ...e, _uid: d.id }));
     });
     return all;
@@ -330,6 +331,7 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, sh
 
 function App() {
   const [loaded, setLoaded] = useState(false);
+  const [syncedAt, setSyncedAt] = useState(null);        // when data was last pulled fresh from the server
   const [authUser, setAuthUser] = useState(undefined);   // undefined=checking, null=signed out, object=signed in
   const [tab, setTab] = useState("entry");
   const [employees, setEmployees] = useState([]); // {id,name,rates:{}}
@@ -384,6 +386,7 @@ function App() {
     setMySalary(mySalary);
     setAdjustments(adjustments);
     setMyAdj(myAdj);
+    setSyncedAt(new Date());     // mark data as freshly pulled
   }, []);
 
   // watch auth state; (re)load data whenever the signed-in user changes
@@ -396,11 +399,15 @@ function App() {
     });
   }, [refresh]);
 
-  // re-pull when returning to the tab so each device sees the latest
+  // keep data live: re-pull on focus, on tab-visible, and on a 60s heartbeat (so a left-open
+  // payroll tab is never stale). Reads always hit the server, so each pull is the latest.
   useEffect(() => {
-    const onFocus = () => { if (window._auth && window._auth.currentUser) refresh(); };
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    const pull = () => { if (window._auth && window._auth.currentUser && !document.hidden) refresh(); };
+    const onVis = () => { if (!document.hidden) pull(); };
+    window.addEventListener("focus", pull);
+    document.addEventListener("visibilitychange", onVis);
+    const id = setInterval(pull, 60000);
+    return () => { window.removeEventListener("focus", pull); document.removeEventListener("visibilitychange", onVis); clearInterval(id); };
   }, [refresh]);
 
   const persistEmployees = useCallback(async (next) => {
@@ -547,7 +554,7 @@ function App() {
       {isOwner && !impersonate && (
         <OwnerView employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} manualLocks={manualLocks} toggleLock={toggleLock}
           persistEmployees={persistEmployees} persistSalaries={persistSalaries} persistAdjustments={persistAdjustments} deleteEntry={deleteOwnerEntry}
-          onViewAs={startImpersonate} showToast={showToast} />
+          onViewAs={startImpersonate} syncedAt={syncedAt} onRefresh={refresh} showToast={showToast} />
       )}
 
       {/* signed in as staff/manager → scoped entry screen */}
@@ -1027,8 +1034,11 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
 }
 
 /* ---------- owner view ---------- */
-function OwnerView({ employees, entries, salaries, adjustments, manualLocks, toggleLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, onViewAs, showToast }) {
+function OwnerView({ employees, entries, salaries, adjustments, manualLocks, toggleLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, onViewAs, syncedAt, onRefresh, showToast }) {
   const [sub, setSub] = useState("rollup");
+  const [refreshing, setRefreshing] = useState(false);
+  const doRefresh = async () => { setRefreshing(true); try { await onRefresh(); } finally { setRefreshing(false); } };
+  const syncLabel = syncedAt ? syncedAt.toLocaleTimeString([], { hour:"numeric", minute:"2-digit", second:"2-digit" }) : "—";
   const viewable = employees.filter(e => !e.salaryOnly && !e.isManager)
     .slice().sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
   return (
@@ -1039,12 +1049,18 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, tog
           <button className={"tab"+(sub==="rates"?" active":"")} onClick={()=>setSub("rates")}>Employees &amp; rates</button>
           <button className={"tab"+(sub==="entries"?" active":"")} onClick={()=>setSub("entries")}>All entries</button>
         </div>
-        {onViewAs && (
-          <select value="" onChange={e=>{ const emp = viewable.find(x=>x.id===e.target.value); if (emp) onViewAs(emp); }} style={{maxWidth:240}}>
-            <option value="">👁 View as employee…</option>
-            {viewable.map(e => <option key={e.id} value={e.id}>{lastFirst(e.name)}</option>)}
-          </select>
-        )}
+        <div style={{display:"flex", alignItems:"center", gap:12, flexWrap:"wrap"}}>
+          <div style={{display:"flex", alignItems:"center", gap:8, fontSize:12, color:"var(--muted)"}}>
+            <span title="Data is pulled live from the server on every load, on a 60s heartbeat, and whenever you return to the tab.">Synced {syncLabel}</span>
+            <button className="btn btn-ghost" style={{padding:"5px 12px", fontSize:13}} onClick={doRefresh} disabled={refreshing}>{refreshing ? "Refreshing…" : "↻ Refresh"}</button>
+          </div>
+          {onViewAs && (
+            <select value="" onChange={e=>{ const emp = viewable.find(x=>x.id===e.target.value); if (emp) onViewAs(emp); }} style={{maxWidth:240}}>
+              <option value="">👁 View as employee…</option>
+              {viewable.map(e => <option key={e.id} value={e.id}>{lastFirst(e.name)}</option>)}
+            </select>
+          )}
+        </div>
       </div>
       {sub==="rollup"  && <Rollup employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} persistAdjustments={persistAdjustments} manualLocks={manualLocks} toggleLock={toggleLock} showToast={showToast} />}
       {sub==="rates"   && <Rates employees={employees} salaries={salaries} persistEmployees={persistEmployees} persistSalaries={persistSalaries} showToast={showToast} />}
