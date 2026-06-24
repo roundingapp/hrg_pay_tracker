@@ -1090,9 +1090,12 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [dayDate, setDayDate] = useState(todayISO());
-  const [sortKey, setSortKey] = useState(() => { try { return localStorage.getItem("hrgRollupSortKey") || null; } catch(e){ return null; } });   // remembered roll-up sort
-  const [sortDir, setSortDir] = useState(() => { try { return localStorage.getItem("hrgRollupSortDir") || "desc"; } catch(e){ return "desc"; } });
+  // remembered roll-up sort. localStorage survives reloads; window._rollupSort* survives remounts
+  // (tab-switch, data refresh) even when storage is blocked (e.g. Private mode) — so it stops resetting.
+  const [sortKey, setSortKey] = useState(() => { try { return localStorage.getItem("hrgRollupSortKey") || window._rollupSortKey || null; } catch(e){ return window._rollupSortKey || null; } });
+  const [sortDir, setSortDir] = useState(() => { try { return localStorage.getItem("hrgRollupSortDir") || window._rollupSortDir || "desc"; } catch(e){ return window._rollupSortDir || "desc"; } });
   useEffect(() => {
+    window._rollupSortKey = sortKey; window._rollupSortDir = sortDir;
     try {
       if (sortKey) { localStorage.setItem("hrgRollupSortKey", sortKey); localStorage.setItem("hrgRollupSortDir", sortDir); }
       else { localStorage.removeItem("hrgRollupSortKey"); localStorage.removeItem("hrgRollupSortDir"); }

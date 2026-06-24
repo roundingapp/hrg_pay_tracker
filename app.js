@@ -972,19 +972,21 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
   const [dayDate, setDayDate] = useState(todayISO());
   const [sortKey, setSortKey] = useState(() => {
     try {
-      return localStorage.getItem("hrgRollupSortKey") || null;
+      return localStorage.getItem("hrgRollupSortKey") || window._rollupSortKey || null;
     } catch (e) {
-      return null;
+      return window._rollupSortKey || null;
     }
   });
   const [sortDir, setSortDir] = useState(() => {
     try {
-      return localStorage.getItem("hrgRollupSortDir") || "desc";
+      return localStorage.getItem("hrgRollupSortDir") || window._rollupSortDir || "desc";
     } catch (e) {
-      return "desc";
+      return window._rollupSortDir || "desc";
     }
   });
   useEffect(() => {
+    window._rollupSortKey = sortKey;
+    window._rollupSortDir = sortDir;
     try {
       if (sortKey) {
         localStorage.setItem("hrgRollupSortKey", sortKey);
