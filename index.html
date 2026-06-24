@@ -169,6 +169,9 @@
   .period-nav button:hover:not(:disabled) { background:#f3f1ea; }
   .period-nav button:disabled { opacity:.35; cursor:default; }
   .period-total { font-size:13px; color:var(--muted); }
+  .pay-breakdown { display:inline-block; min-width:210px; font-size:14px; color:var(--ink); text-align:left; }
+  .pay-breakdown > div { display:flex; justify-content:space-between; gap:28px; padding:2px 0; }
+  .pay-breakdown .pay-total { border-top:1px solid var(--line); margin-top:4px; padding-top:6px; font-weight:700; }
   .week-grid { display:grid; grid-template-columns: repeat(7, 1fr); gap:6px; }
   .week-grid .dow { font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--faint); text-align:center; padding-bottom:2px; }
   .day-cell { border:1px solid var(--line); border-radius:10px; padding:8px 4px; min-height:60px; cursor:pointer; background:#fff;
@@ -770,7 +773,9 @@ function App() {
           </div>
           <EntryView key={impersonate.id} emp={impersonate} entries={entries} upsertEntry={upsertForImpersonated}
             certs={impersonateCerts} certifyPeriod={certifyForImpersonated} manualLocks={manualLocks}
-            audit={true} baseSalary={salaries[impersonate.id]} showToast={showToast} />
+            audit={true} baseSalary={salaries[impersonate.id]}
+            empAdj={(() => { const o = {}; for (const [p, byEmp] of Object.entries(adjustments||{})) if (byEmp && byEmp[impersonate.id]) o[p] = byEmp[impersonate.id]; return o; })()}
+            showToast={showToast} />
         </>
       )}
 
@@ -789,7 +794,7 @@ function App() {
             ? <ManagerView manager={myEmp} employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast} />
             : myEmp.managedBy
               ? <div className="card"><div className="empty">Your hours are entered for you — there's nothing to log here. Reach out to the office if something looks off.</div></div>
-              : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} baseSalary={mySalary} showToast={showToast} />
+              : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} baseSalary={mySalary} empAdj={myAdj} showToast={showToast} />
       )}
 
       <div className={"toast"+(toast?" show":"")}>{toast}</div>
@@ -967,7 +972,7 @@ function OwnerLogin({ showToast }) {
 }
 
 /* ---------- entry view ---------- */
-function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary }) {
+function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj }) {
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
@@ -1001,7 +1006,10 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const cert = certs && certs[String(periodIdx)];
   const certifiedForPeriod = !capped || (cert && Number(cert.cap) === cap);
   const gateOpen = certifiedForPeriod || !!audit;   // owner audit ("view as") edits past the cap gate
-  const baseBiweekly = Number(baseSalary) > 0 ? Number(baseSalary) / 26 : 0;   // shown when known (owner view-as)
+  const baseBiweekly = Number(baseSalary) > 0 ? Number(baseSalary) / 26 : 0;   // shown when known (owner view-as / NP own)
+  const periodAdj = (empAdj && empAdj[String(periodIdx)]) || {};   // this period's bonus / reimbursement
+  const periodBonus = Number(periodAdj.bonus) || 0;
+  const periodReimb = Number(periodAdj.reimbursement) || 0;
   const periodLabel = fmtShortYr(period.start) + " – " + fmtShortYr(period.end);
 
   // when navigating to another period, pull the selected day into that period
@@ -1100,8 +1108,14 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
               <button onClick={()=>{ flushEntry(); setPeriodIdx(i=>Math.min(maxPeriodIdx, i+1)); }} disabled={periodIdx>=maxPeriodIdx} aria-label="Next pay period">›</button>
             </div>
             <div className="period-total">
-              {baseBiweekly > 0
-                ? <span>Base <span className="pay">{money(baseBiweekly)}</span> · Variable <span className="pay">{money(periodDollars)}</span> · Total <span className="pay">{money(baseBiweekly + periodDollars)}</span></span>
+              {(baseBiweekly > 0 || periodBonus > 0 || periodReimb > 0)
+                ? <div className="pay-breakdown">
+                    <div><span>Base</span><span className="pay">{money(baseBiweekly)}</span></div>
+                    <div><span>Variable</span><span className="pay">{money(periodDollars)}</span></div>
+                    {periodBonus > 0 && <div><span>Bonus</span><span className="pay">{money(periodBonus)}</span></div>}
+                    {periodReimb > 0 && <div><span>Reimbursement</span><span className="pay">{money(periodReimb)}</span></div>}
+                    <div className="pay-total"><span>Total</span><span className="pay">{money(baseBiweekly + periodDollars + periodBonus + periodReimb)}</span></div>
+                  </div>
                 : <span>This period:<span className="pay" style={{marginLeft:6}}>{money(periodDollars)}</span></span>}
             </div>
           </div>
