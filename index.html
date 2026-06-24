@@ -198,6 +198,9 @@
   .impersonate-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:var(--ink); color:#fff; padding:11px 16px; border-radius:var(--radius); margin-bottom:14px; font-size:14px; }
   .impersonate-bar strong { color:#fff; }
   .impersonate-bar .btn { background:#fff; color:var(--ink); border:none; flex:0 0 auto; }
+  .cell-in { width:100%; min-width:54px; padding:4px 6px; font-size:13px; text-align:right; border:1px solid var(--line); border-radius:6px; background:#fffdf8; }
+  .cell-in:focus { border-color:var(--accent); outline:none; }
+  .cell-in.notes-in { text-align:left; min-width:130px; }
 </style>
 </head>
 <body>
@@ -463,6 +466,38 @@ async function saveMySalary(uid, annual) {
     return true;
   } catch (e) { console.error("my-salary write failed", e); return false; }
 }
+// owner-only roll-up overrides/adjustments per pay period: { value: { "<periodIdx>": { "<empId>":
+// { counts:{type:val}, other, base, bonus, reimbursement, notes } } } }. Owner-only (same trick as salaries).
+const ADJ_DOC = "adjustments";
+async function loadAdjustments() {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", ADJ_DOC);
+    const snap = await window._fs.getDoc(ref);
+    return (snap.exists() && snap.data() && snap.data().value) || {};
+  } catch (e) { return {}; }
+}
+async function saveAdjustments(map) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", ADJ_DOC);
+    await window._fs.setDoc(ref, { value: map });
+    return true;
+  } catch (e) { console.error("adjustments write failed", e); return false; }
+}
+// a person's OWN bonus/reimbursement per period, mirrored to their doc so they see it in their breakdown
+async function loadMyAdj(uid) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", uid);
+    const snap = await window._fs.getDoc(ref);
+    return (snap.exists() && snap.data() && snap.data().adj) || {};
+  } catch (e) { return {}; }
+}
+async function saveMyAdj(uid, map) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", uid);
+    await window._fs.setDoc(ref, { adj: map }, { merge: true });
+    return true;
+  } catch (e) { console.error("my-adj write failed", e); return false; }
+}
 
 /* ---------- public roster of valid usernames (collection "public", doc "usernames") ----------
    Publicly readable (no names/rates — just the list of active usernames) so the login screen
@@ -545,6 +580,8 @@ function App() {
   const [certs, setCerts] = useState({});         // NP's per-period cap certifications {periodIdx:{cap,at}}
   const [salaries, setSalaries] = useState({});   // owner-only annual salaries {empId: annual}
   const [mySalary, setMySalary] = useState(0);    // the signed-in NP's own salary (from their own doc)
+  const [adjustments, setAdjustments] = useState({});  // owner-only roll-up overrides {periodIdx:{empId:{...}}}
+  const [myAdj, setMyAdj] = useState({});         // the signed-in NP's own bonus/reimbursement by period
   const [impersonate, setImpersonate] = useState(null);       // owner "view as" target employee (or null)
   const [impersonateDoc, setImpersonateDoc] = useState(null); // the entries doc that employee's data lives in
   const [impersonateCerts, setImpersonateCerts] = useState({});
@@ -578,6 +615,8 @@ function App() {
     setCerts(isOwnerUser(u) ? {} : await loadCertsForUid(u.uid));
     setSalaries(isOwnerUser(u) ? await loadSalaries() : {});
     setMySalary(isOwnerUser(u) ? 0 : await loadMySalary(u.uid));
+    setAdjustments(isOwnerUser(u) ? await loadAdjustments() : {});
+    setMyAdj(isOwnerUser(u) ? {} : await loadMyAdj(u.uid));
   }, []);
 
   // watch auth state; (re)load data whenever the signed-in user changes
@@ -611,6 +650,19 @@ function App() {
     for (const [empId, annual] of Object.entries(map)) {
       const docId = (entries.find(e => e.empId === empId) || {})._uid;
       if (docId) await saveMySalary(docId, annual);
+    }
+  }, [entries]);
+  const persistAdjustments = useCallback(async (map) => {
+    setAdjustments(map);
+    await saveAdjustments(map);
+    // mirror each person's own bonus/reimbursement into their doc so they see it in their breakdown
+    const byEmp = {};   // {empId: {periodIdx: {bonus, reimbursement}}}
+    for (const [pIdx, perEmp] of Object.entries(map || {}))
+      for (const [empId, a] of Object.entries(perEmp || {}))
+        (byEmp[empId] = byEmp[empId] || {})[pIdx] = { bonus: Number(a.bonus)||0, reimbursement: Number(a.reimbursement)||0 };
+    for (const [empId, perPeriod] of Object.entries(byEmp)) {
+      const docId = (entries.find(e => e.empId === empId) || {})._uid;
+      if (docId) await saveMyAdj(docId, perPeriod);
     }
   }, [entries]);
   const toggleLock = useCallback(async (periodIndex) => {
@@ -724,8 +776,8 @@ function App() {
 
       {/* signed in as owner → full panel */}
       {isOwner && !impersonate && (
-        <OwnerView employees={employees} entries={entries} salaries={salaries} manualLocks={manualLocks} toggleLock={toggleLock}
-          persistEmployees={persistEmployees} persistSalaries={persistSalaries} deleteEntry={deleteOwnerEntry}
+        <OwnerView employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} manualLocks={manualLocks} toggleLock={toggleLock}
+          persistEmployees={persistEmployees} persistSalaries={persistSalaries} persistAdjustments={persistAdjustments} deleteEntry={deleteOwnerEntry}
           onViewAs={startImpersonate} showToast={showToast} />
       )}
 
@@ -1195,7 +1247,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
 }
 
 /* ---------- owner view ---------- */
-function OwnerView({ employees, entries, salaries, manualLocks, toggleLock, persistEmployees, persistSalaries, deleteEntry, onViewAs, showToast }) {
+function OwnerView({ employees, entries, salaries, adjustments, manualLocks, toggleLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, onViewAs, showToast }) {
   const [sub, setSub] = useState("rollup");
   const viewable = employees.filter(e => !e.salaryOnly && !e.isManager)
     .slice().sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
@@ -1214,7 +1266,7 @@ function OwnerView({ employees, entries, salaries, manualLocks, toggleLock, pers
           </select>
         )}
       </div>
-      {sub==="rollup"  && <Rollup employees={employees} entries={entries} salaries={salaries} manualLocks={manualLocks} toggleLock={toggleLock} showToast={showToast} />}
+      {sub==="rollup"  && <Rollup employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} persistAdjustments={persistAdjustments} manualLocks={manualLocks} toggleLock={toggleLock} showToast={showToast} />}
       {sub==="rates"   && <Rates employees={employees} salaries={salaries} persistEmployees={persistEmployees} persistSalaries={persistSalaries} showToast={showToast} />}
       {sub==="entries" && <AllEntries employees={employees} entries={entries} deleteEntry={deleteEntry} showToast={showToast} />}
     </>
@@ -1235,7 +1287,7 @@ function payForEntry(emp, entry) {
   return total;
 }
 
-function Rollup({ employees, entries, salaries, manualLocks, toggleLock, showToast }) {
+function Rollup({ employees, entries, salaries, adjustments, persistAdjustments, manualLocks, toggleLock, showToast }) {
   const periods = periodList(10, 2);                 // selectable window
   const [mode, setMode] = useState("period");        // "period" | "day" | "custom"
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
@@ -1256,6 +1308,35 @@ function Rollup({ employees, entries, salaries, manualLocks, toggleLock, showToa
   const selPeriod = periodByIndex(periodIdx);
   const locked = isPeriodLockedCombined(periodIdx, manualLocks);
 
+  // owner-only editable overrides/adjustments, debounced auto-save (like the roster editor)
+  const [adjDraft, setAdjDraft] = useState(adjustments || {});
+  const adjDirty = useRef(false);
+  useEffect(() => { if (!adjDirty.current) setAdjDraft(adjustments || {}); }, [adjustments]);
+  useEffect(() => {
+    if (!adjDirty.current) return;
+    const id = setTimeout(() => { adjDirty.current = false; persistAdjustments && persistAdjustments(adjDraft); }, 700);
+    return () => clearTimeout(id);
+  }, [adjDraft]);
+  const editable = mode === "period";   // overrides are per pay period
+  const periodAdj = (editable && adjDraft[periodIdx]) || {};
+  const setAdj = (empId, field, value) => {
+    adjDirty.current = true;
+    setAdjDraft(d => {
+      const next = { ...d };
+      const p = { ...(next[periodIdx] || {}) };
+      const cur = { ...(p[empId] || {}) };
+      if (field.indexOf("count.") === 0) {
+        const t = field.slice(6);
+        cur.counts = { ...(cur.counts || {}) };
+        if (value === "") delete cur.counts[t]; else cur.counts[t] = value;
+        if (!Object.keys(cur.counts).length) delete cur.counts;
+      } else { if (value === "" || value == null) delete cur[field]; else cur[field] = value; }
+      if (!Object.keys(cur).length) delete p[empId]; else p[empId] = cur;
+      next[periodIdx] = p;
+      return next;
+    });
+  };
+
   // effective date window
   const winFrom = mode === "period" ? selPeriod.start : mode === "day" ? dayDate : from;
   const winTo   = mode === "period" ? selPeriod.end   : mode === "day" ? dayDate : to;
@@ -1266,22 +1347,33 @@ function Rollup({ employees, entries, salaries, manualLocks, toggleLock, showToa
     return true;
   });
 
+  const has = (v) => v != null && v !== "";
   const buildRow = (emp, empEntries, removed) => {
-    const counts = {};
-    let variable = 0;   // pay from what was logged in the app
-    let otherAmt = 0;
+    const computedCounts = {}; let computedOther = 0;
     const otherNotes = [];
-    for (const t of ALL_TYPES) counts[t.key] = 0;
+    for (const t of ALL_TYPES) computedCounts[t.key] = 0;
     for (const e of empEntries) {
-      for (const t of ALL_TYPES) counts[t.key] += Number(e.counts?.[t.key]||0);
-      variable += payForEntry(removed ? null : emp, e);   // removed staff: fixed + Other still count; their variable rates are gone
+      for (const t of ALL_TYPES) computedCounts[t.key] += Number(e.counts?.[t.key]||0);
       const ov = Number(e.other?.amount);
-      if (ov > 0) { otherAmt += ov; otherNotes.push({ date: e.date, amount: ov, note: (e.other.note || "").trim() }); }
+      if (ov > 0) { computedOther += ov; otherNotes.push({ date: e.date, amount: ov, note: (e.other.note || "").trim() }); }
     }
-    // Base = biweekly salary (annual ÷ 26), only meaningful in the Pay-period view
+    const adj = periodAdj[emp.id] || {};
+    // counts: per-type override
+    const counts = {};
+    for (const t of ALL_TYPES) counts[t.key] = (adj.counts && has(adj.counts[t.key])) ? Number(adj.counts[t.key]) : computedCounts[t.key];
+    const other = has(adj.other) ? Number(adj.other) : computedOther;
+    // variable: direct override (e.g. collection-based admin-entered pay), else from effective counts + Other
+    let variable;
+    if (has(adj.variable)) variable = Number(adj.variable);
+    else { variable = other; for (const t of ALL_TYPES) variable += counts[t.key] * (isFixed(t.key) ? t.rate : Number((removed ? null : emp)?.rates?.[t.key]||0)); }
     const annual = Number((salaries && salaries[emp.id]) || 0);
-    const base = (mode === "period" && annual > 0) ? annual / 26 : 0;
-    return { emp, counts, base, variable, pay: base + variable, n: empEntries.length, otherAmt, otherNotes, removed };
+    const computedBase = (mode === "period" && annual > 0) ? annual / 26 : 0;
+    const base = has(adj.base) ? Number(adj.base) : computedBase;
+    const bonus = Number(adj.bonus) || 0;
+    const reimb = Number(adj.reimbursement) || 0;
+    const notes = adj.notes || "";
+    return { emp, adj, computedCounts, computedOther, counts, base, variable, bonus, reimb, notes, other, otherAmt: other,
+      pay: base + variable + bonus + reimb, n: empEntries.length, otherNotes, removed };
   };
   const rows = employees.map(emp => buildRow(emp, filtered.filter(e => e.empId === emp.id), false));
   // include entries from staff who have since been removed (orphaned but still recorded/owed)
@@ -1295,13 +1387,15 @@ function Rollup({ employees, entries, salaries, manualLocks, toggleLock, showToa
   const grand = rows.reduce((s,r)=>s+r.pay,0);
   const totalBase = rows.reduce((s,r)=>s+r.base,0);
   const totalVariable = rows.reduce((s,r)=>s+r.variable,0);
+  const totalBonus = rows.reduce((s,r)=>s+r.bonus,0);
+  const totalReimb = rows.reduce((s,r)=>s+r.reimb,0);
   const totalConsults = rows.reduce((s,r)=>s+r.counts.consults,0);
   const totalFollow = rows.reduce((s,r)=>s+r.counts.followups,0);
   const totalOther = rows.reduce((s,r)=>s+r.otherAmt,0);
 
   // sortable roll-up table: click a header to sort (asc → desc → back to roster order)
   const sortVal = (r, k) => k==="name" ? lastNameKey(r.emp.name)
-    : k==="pay" ? r.pay : k==="base" ? r.base : k==="variable" ? r.variable : k==="other" ? r.otherAmt : (r.counts[k]||0);
+    : k==="pay" ? r.pay : k==="base" ? r.base : k==="variable" ? r.variable : k==="bonus" ? r.bonus : k==="reimb" ? r.reimb : k==="other" ? r.otherAmt : (r.counts[k]||0);
   const sortedRows = sortKey
     ? [...rows].sort((a,b) => { const va=sortVal(a,sortKey), vb=sortVal(b,sortKey);
         const cmp = typeof va==="string" ? va.localeCompare(vb) : (va-vb); return sortDir==="asc"?cmp:-cmp; })
@@ -1316,6 +1410,25 @@ function Rollup({ employees, entries, salaries, manualLocks, toggleLock, showToa
     <th className={num ? "num" : ""} onClick={()=>sortBy(k)} style={{cursor:"pointer", userSelect:"none", whiteSpace:"nowrap"}}>
       {label}{sortKey===k ? (sortDir==="asc" ? " ▲" : " ▼") : ""}
     </th>
+  );
+  // editable roll-up cells (Pay-period view only): dollar / count overrides; Pay stays computed
+  const ovCell = (r, field, eff) => (
+    <td className="num">
+      {editable
+        ? <input className="cell-in" type="text" inputMode="decimal"
+            value={has(r.adj[field]) ? r.adj[field] : (eff ? Math.round(eff*100)/100 : "")}
+            onChange={e=>setAdj(r.emp.id, field, e.target.value)} />
+        : (eff ? money(eff) : "")}
+    </td>
+  );
+  const cntCell = (r, t) => (
+    <td className="num">
+      {editable
+        ? <input className="cell-in" type="text" inputMode="numeric"
+            value={(r.adj.counts && has(r.adj.counts[t])) ? r.adj.counts[t] : (r.counts[t] || "")}
+            onChange={e=>setAdj(r.emp.id, "count."+t, e.target.value)} />
+        : (r.counts[t] || "")}
+    </td>
   );
 
   // ----- day-view month calendar -----
@@ -1469,29 +1582,37 @@ function Rollup({ employees, entries, salaries, manualLocks, toggleLock, showToa
               {sortTh("name", "Employee")}
               {sortTh("pay", "Pay", true)}
               {sortTh("base", "Base", true)}{sortTh("variable", "Variable", true)}
+              {sortTh("bonus", "Bonus", true)}{sortTh("reimb", "Reimburse", true)}
               {sortTh("consults", "Cons", true)}{sortTh("followups", "F/U", true)}
               {sortTh("clinic_pts", "Clinic pts", true)}
-              {sortTh("perdiem", "Per diem", true)}{sortTh("pernote", "Notes", true)}
+              {sortTh("perdiem", "Per diem", true)}{sortTh("pernote", "Per note", true)}
               {sortTh("clinic_hr", "Clinic hr", true)}{sortTh("virtual_hr", "Virtual hr", true)}{sortTh("hosp_hr", "Hosp hr", true)}
               {sortTh("other", "Other", true)}
+              <th style={{whiteSpace:"nowrap"}}>Notes</th>
             </tr>
           </thead>
           <tbody>
             {sortedRows.map(r => (
               <tr key={r.emp.id}>
-                <td>{lastFirst(r.emp.name)}</td>
+                <td style={{whiteSpace:"nowrap"}}>{lastFirst(r.emp.name)}</td>
                 <td className="num pay">{money(r.pay)}</td>
-                <td className="num">{r.base ? money(r.base) : ""}</td>
-                <td className="num">{r.variable ? money(r.variable) : ""}</td>
-                <td className="num">{r.counts.consults||""}</td>
-                <td className="num">{r.counts.followups||""}</td>
-                <td className="num">{r.counts.clinic_pts||""}</td>
-                <td className="num">{r.counts.perdiem||""}</td>
-                <td className="num">{r.counts.pernote||""}</td>
-                <td className="num">{r.counts.clinic_hr||""}</td>
-                <td className="num">{r.counts.virtual_hr||""}</td>
-                <td className="num">{r.counts.hosp_hr||""}</td>
-                <td className="num">{r.otherAmt ? money(r.otherAmt) : ""}</td>
+                {ovCell(r, "base", r.base)}
+                {ovCell(r, "variable", r.variable)}
+                {ovCell(r, "bonus", r.bonus)}
+                {ovCell(r, "reimbursement", r.reimb)}
+                {cntCell(r, "consults")}
+                {cntCell(r, "followups")}
+                {cntCell(r, "clinic_pts")}
+                {cntCell(r, "perdiem")}
+                {cntCell(r, "pernote")}
+                {cntCell(r, "clinic_hr")}
+                {cntCell(r, "virtual_hr")}
+                {cntCell(r, "hosp_hr")}
+                {ovCell(r, "other", r.otherAmt)}
+                <td>{editable
+                  ? <input className="cell-in notes-in" type="text" placeholder="—"
+                      value={r.adj.notes || ""} onChange={e=>setAdj(r.emp.id, "notes", e.target.value)} />
+                  : (r.notes || "")}</td>
               </tr>
             ))}
             <tr className="total-row">
@@ -1499,6 +1620,8 @@ function Rollup({ employees, entries, salaries, manualLocks, toggleLock, showToa
               <td className="num pay">{money(grand)}</td>
               <td className="num">{totalBase ? money(totalBase) : ""}</td>
               <td className="num">{totalVariable ? money(totalVariable) : ""}</td>
+              <td className="num">{totalBonus ? money(totalBonus) : ""}</td>
+              <td className="num">{totalReimb ? money(totalReimb) : ""}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.consults,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.followups,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.clinic_pts,0)}</td>
@@ -1508,6 +1631,7 @@ function Rollup({ employees, entries, salaries, manualLocks, toggleLock, showToa
               <td className="num">{rows.reduce((s,r)=>s+r.counts.virtual_hr,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.hosp_hr,0)}</td>
               <td className="num">{totalOther ? money(totalOther) : ""}</td>
+              <td></td>
             </tr>
           </tbody>
         </table>
@@ -1789,7 +1913,9 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
 
               <div className="emp-section">
                 <div className="check-cluster">
-                  <label><input type="checkbox" checked={!!emp.salaryOnly} onChange={e=>setSalaryOnly(emp.id, e.target.checked)} /> Salary only <span className="hint-sm">no login · Base only</span></label>
+                  {emp.managedBy !== "ADMIN" && (
+                    <label><input type="checkbox" checked={!!emp.salaryOnly} onChange={e=>setSalaryOnly(emp.id, e.target.checked)} /> Salary only <span className="hint-sm">no login · Base only</span></label>
+                  )}
                   {!emp.salaryOnly && (
                     <label><input type="checkbox" checked={!!emp.isManager} onChange={e=>setIsManager(emp.id, e.target.checked)} /> Office manager <span className="hint-sm">enters for others</span></label>
                   )}
