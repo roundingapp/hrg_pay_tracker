@@ -410,6 +410,19 @@ function App() {
     return () => { window.removeEventListener("focus", pull); document.removeEventListener("visibilitychange", onVis); clearInterval(id); };
   }, [refresh]);
 
+  // LIVE roster: subscribe to the employee list in real time, so an owner's "Entered by" assignment
+  // (and any rate/name change) shows up on the manager's / everyone's screen instantly — no waiting
+  // for a refresh. The Rates editor's dirty-guard means this won't clobber an in-progress owner edit.
+  useEffect(() => {
+    if (!uid || !window._fs || !window._fs.onSnapshot) return;
+    const ref = window._fs.doc(window._db, "paytracker", "employees");
+    const unsub = window._fs.onSnapshot(ref, (snap) => {
+      const v = snap.exists() && snap.data() ? snap.data().value : [];
+      setEmployees(Array.isArray(v) ? v : []);
+    }, () => {});   // on listener error, the 60s heartbeat still covers it
+    return () => { try { unsub && unsub(); } catch (e) {} };
+  }, [uid]);
+
   const persistEmployees = useCallback(async (next) => {
     setEmployees(next);
     await sSet("employees", next);
