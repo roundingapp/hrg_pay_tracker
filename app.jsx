@@ -911,9 +911,10 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
                     <div className="pay-total"><span>Total</span><span className="pay">{money(baseBiweekly + periodDollars + periodBonus + periodReimb)}</span></div>
                   </div>
                 : <span>This period:<span className="pay" style={{marginLeft:6}}>{money(periodDollars)}</span></span>}
+              <div style={{fontSize:12, color:"var(--muted)", marginTop:4}}>Payday {period.paydayLabel}</div>
             </div>
           </div>
-          <p className="hint" style={{marginTop:0, marginBottom:10}}>Tap a day to add or edit its counts. Payday {period.paydayLabel}.</p>
+          <div style={{height:12}} />
           <div className="week-grid">
             {DOW.map(d => <div className="dow" key={"dow-"+d}>{d}</div>)}
             {periodDays.map(iso => {
