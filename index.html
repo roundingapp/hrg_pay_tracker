@@ -201,12 +201,12 @@
   .impersonate-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:var(--ink); color:#fff; padding:11px 16px; border-radius:var(--radius); margin-bottom:14px; font-size:14px; }
   .impersonate-bar strong { color:#fff; }
   .impersonate-bar .btn { background:#fff; color:var(--ink); border:none; flex:0 0 auto; }
-  .cell-in { width:100%; min-width:74px; padding:4px 6px; font-size:13px; text-align:center; border:1px solid var(--line); border-radius:6px; background:#fffdf8; }
-  .cell-in:focus { border-color:var(--accent); outline:none; }
-  .cell-in.notes-in { text-align:left; min-width:150px; }
+  .rollup-table .cell-in { box-sizing:border-box; width:100%; min-width:82px; padding:4px 4px; font-size:13px; text-align:center; border:1px solid var(--line); border-radius:6px; background:#fffdf8; }
+  .rollup-table .cell-in:focus { border-color:var(--accent); outline:none; }
+  .rollup-table .cell-in.notes-in { text-align:left; min-width:150px; }
   .rollup-table th, .rollup-table td.num { text-align:center; }
   .rollup-table th:first-child { text-align:left; }
-  .rollup-table td.num { min-width:74px; }
+  .rollup-table td.num { min-width:82px; }
 </style>
 </head>
 <body>
