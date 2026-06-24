@@ -1167,7 +1167,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     else { variable = other; for (const t of ALL_TYPES) variable += counts[t.key] * (isFixed(t.key) ? t.rate : Number((removed ? null : emp)?.rates?.[t.key]||0)); }
     const annual = Number((salaries && salaries[emp.id]) || 0);
     const computedBase = (mode === "period" && annual > 0) ? annual / 26 : 0;
-    const base = has(adj.base) ? Number(adj.base) : computedBase;
+    const base = computedBase;   // Base is read-only in the roll-up (salary ÷ 26) — change it in Employees & rates
     const bonus = Number(adj.bonus) || 0;
     const reimb = Number(adj.reimbursement) || 0;
     const notes = adj.notes || "";
@@ -1211,24 +1211,43 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     </th>
   );
   // editable roll-up cells (Pay-period view only): dollar / count overrides; Pay stays computed
-  const ovCell = (r, field, eff) => (
-    <td className="num">
-      {editable
-        ? <input className="cell-in" type="text" inputMode="decimal"
-            value={has(r.adj[field]) ? r.adj[field] : (eff ? Math.round(eff*100)/100 : "")}
-            onChange={e=>setAdj(r.emp.id, field, e.target.value)} />
-        : (eff ? money(eff) : "")}
-    </td>
-  );
-  const cntCell = (r, t) => (
-    <td className="num cnt">
-      {editable
-        ? <input className="cell-in cnt-in" type="text" inputMode="numeric"
-            value={(r.adj.counts && has(r.adj.counts[t])) ? r.adj.counts[t] : (r.counts[t] || "")}
-            onChange={e=>setAdj(r.emp.id, "count."+t, e.target.value)} />
-        : (r.counts[t] || "")}
-    </td>
-  );
+  // Confirm before overriding a cell that already has a value (guards accidental edits to the pre-filled grid).
+  const [pendingCell, setPendingCell] = useState(null);
+  const [overrideOk, setOverrideOk] = useState(false);
+  const confirmedRef = useRef(new Set());   // cells the owner has already approved this session
+  const pendingElRef = useRef(null);
+  const guardEdit = (e, key, label, cur) => {
+    if (confirmedRef.current.has(key) || cur === "" || cur == null) { confirmedRef.current.add(key); return; }
+    pendingElRef.current = e.target;
+    e.target.blur();                         // block editing until they approve the override
+    setPendingCell({ key, label, cur });
+  };
+  const ovCell = (r, field, eff, label) => {
+    const cur = has(r.adj[field]) ? r.adj[field] : (eff ? Math.round(eff*100)/100 : "");
+    const key = periodIdx + ":" + r.emp.id + ":" + field;
+    return (
+      <td className="num">
+        {editable
+          ? <input className="cell-in" type="text" inputMode="decimal" value={cur}
+              onFocus={(e)=>guardEdit(e, key, (lastFirst(r.emp.name)||"This person") + " · " + label, cur)}
+              onChange={e=>setAdj(r.emp.id, field, e.target.value)} />
+          : (eff ? money(eff) : "")}
+      </td>
+    );
+  };
+  const cntCell = (r, t, label) => {
+    const cur = (r.adj.counts && has(r.adj.counts[t])) ? r.adj.counts[t] : (r.counts[t] || "");
+    const key = periodIdx + ":" + r.emp.id + ":count." + t;
+    return (
+      <td className="num cnt">
+        {editable
+          ? <input className="cell-in cnt-in" type="text" inputMode="numeric" value={cur}
+              onFocus={(e)=>guardEdit(e, key, (lastFirst(r.emp.name)||"This person") + " · " + label, cur)}
+              onChange={e=>setAdj(r.emp.id, "count."+t, e.target.value)} />
+          : (r.counts[t] || "")}
+      </td>
+    );
+  };
 
   // ----- day-view month calendar -----
   const empById = (id) => employees.find(x=>x.id===id);
@@ -1275,6 +1294,19 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
 
   return (
     <div className="card">
+      {pendingCell && (
+        <div className="modal-backdrop" onClick={()=>{ setPendingCell(null); setOverrideOk(false); }}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <h3>Override an existing value?</h3>
+            <p><strong>{pendingCell.label}</strong> already has the value <strong>{pendingCell.cur}</strong>. Editing it replaces that value for payroll.</p>
+            <label className="modal-check"><input type="checkbox" checked={overrideOk} onChange={e=>setOverrideOk(e.target.checked)} /> Yes, I want to override it</label>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={()=>{ setPendingCell(null); setOverrideOk(false); }}>Cancel</button>
+              <button className="btn btn-primary" disabled={!overrideOk} onClick={()=>{ confirmedRef.current.add(pendingCell.key); setPendingCell(null); setOverrideOk(false); const el = pendingElRef.current; setTimeout(()=>{ try { el && el.focus(); } catch(ex){} }, 0); }}>Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
       <h2>Roll-up</h2>
       <p className="hint">Review by pay period, a single day, or a custom range. Pay periods run Sunday–Saturday (14 days), paid the Friday after close.</p>
 
@@ -1395,18 +1427,18 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
               <tr key={r.emp.id}>
                 <td style={{whiteSpace:"nowrap"}}>{lastFirst(r.emp.name)}</td>
                 <td className="num pay">{money(r.pay)}</td>
-                {ovCell(r, "base", r.base)}
-                {ovCell(r, "variable", r.variable)}
-                {ovCell(r, "bonus", r.bonus)}
-                {ovCell(r, "reimbursement", r.reimb)}
-                {cntCell(r, "consults")}
-                {cntCell(r, "followups")}
-                {cntCell(r, "clinic_pts")}
-                {cntCell(r, "perdiem")}
-                {cntCell(r, "clinic_hr")}
-                {cntCell(r, "virtual_hr")}
-                {cntCell(r, "hosp_hr")}
-                {ovCell(r, "other", r.otherAmt)}
+                <td className="num">{r.base ? money(r.base) : ""}</td>
+                {ovCell(r, "variable", r.variable, "Variable")}
+                {ovCell(r, "bonus", r.bonus, "Bonus")}
+                {ovCell(r, "reimbursement", r.reimb, "Reimbursement")}
+                {cntCell(r, "consults", "Consults")}
+                {cntCell(r, "followups", "Follow-ups")}
+                {cntCell(r, "clinic_pts", "Clinic pts")}
+                {cntCell(r, "perdiem", "Per diem")}
+                {cntCell(r, "clinic_hr", "Clinic hr")}
+                {cntCell(r, "virtual_hr", "Virtual hr")}
+                {cntCell(r, "hosp_hr", "Hosp hr")}
+                {ovCell(r, "other", r.otherAmt, "Other")}
                 <td>{editable
                   ? <input className="cell-in notes-in" type="text" placeholder="—"
                       value={r.adj.notes || ""} onChange={e=>setAdj(r.emp.id, "notes", e.target.value)} />
