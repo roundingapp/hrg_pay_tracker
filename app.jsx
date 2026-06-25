@@ -370,6 +370,7 @@ function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
   const yr = String(t0.getFullYear());
   const usedApproved = (pto||[]).filter(r => r.status === "approved" && String(r.date||"").slice(0,4) === yr)
     .reduce((s,r) => s + ptoDayValue(r), 0);
+  const requestedDays = (pto||[]).filter(r => r.status === "requested").reduce((s,r) => s + ptoDayValue(r), 0);
   const selDays = Object.values(sel).reduce((s,v) => s + (v.half ? 0.5 : 1), 0);
   const allow = Number(allowance) || 0;
   const remaining = Math.max(0, allow - usedApproved);
@@ -395,7 +396,7 @@ function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal pto-modal" onClick={e=>e.stopPropagation()}>
         <div className="pto-head"><h3>Request PTO</h3><button className="btn btn-ghost" style={{padding:"4px 10px"}} onClick={onClose}>✕</button></div>
-        <div className="pto-counter"><strong>{remaining}</strong> of {allow} day{allow===1?"":"s"} left{selDays>0 ? <span> · requesting {selDays}</span> : null}</div>
+        <div className="pto-counter"><strong>{remaining}</strong> of {allow} day{allow===1?"":"s"} left{requestedDays>0 ? <span> · {requestedDays} requested</span> : null}{selDays>0 ? <span> · selecting {selDays}</span> : null}</div>
         <div className="pto-monthnav"><button onClick={prevM} aria-label="Previous month">‹</button><span>{monthName}</span><button onClick={nextM} aria-label="Next month">›</button></div>
         <div className="pto-grid">
           {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d,i)=><div key={"dow"+i} className="pto-dow">{d[0]}</div>)}
