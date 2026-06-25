@@ -912,6 +912,9 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const ptoEnabled = !!onRequestPto;   // only passed for the staff member's own screen, gated to test users
   const approvedPto = (pto || []).filter(r => r.status === "approved" && r.date >= todayISO())
     .sort((a,b) => a.date.localeCompare(b.date));
+  const requestedPto = (pto || []).filter(r => r.status === "requested" && r.date >= todayISO())
+    .sort((a,b) => a.date.localeCompare(b.date));
+  const ptoFmt = (list) => list.map(r => fmtShort(r.date) + (r.half ? " ½" : "")).join(", ");
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
@@ -1040,11 +1043,10 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
       <h2>Log your work</h2>
       <p className="hint">Logging as <strong>{emp.name}</strong> (@{normU(emp.username)}). Tap a day below to add or edit it.</p>
       {ptoEnabled && (
-        <div className="pto-banner">
-          {approvedPto.length > 0 && (
-            <div className="pto-approved-line">✅ Approved PTO: {approvedPto.map(r => fmtShort(r.date) + (r.half ? " (½)" : "")).join(", ")}</div>
-          )}
-          <div>To request PTO, <a className="pto-link" onClick={()=>setPtoOpen(true)}>click here</a>.</div>
+        <div className="pto-line">
+          {approvedPto.length > 0 && <div className="pto-status">Approved PTO: {ptoFmt(approvedPto)}</div>}
+          {requestedPto.length > 0 && <div className="pto-status pending">Requested PTO: {ptoFmt(requestedPto)} · pending</div>}
+          <a className="pto-link" onClick={()=>setPtoOpen(true)}>Request PTO</a>
         </div>
       )}
 
