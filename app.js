@@ -1408,6 +1408,11 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map((e) => e.id === id ? { ...e, annualSalary: val } : e));
     markDirty();
   };
+  const setPtoDays = (id, val) => {
+    if (val !== "" && !/^\d*\.?\d*$/.test(val)) return;
+    setDraft(draft.map((e) => e.id === id ? { ...e, ptoDays: val } : e));
+    markDirty();
+  };
   const setSalaryOnly = (id, val) => {
     setDraft(draft.map((e) => e.id === id ? { ...e, salaryOnly: val, isManager: val ? false : e.isManager, managedBy: "", fixedEligible: val ? false : e.fixedEligible } : e));
     markDirty();
@@ -1485,6 +1490,9 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       const cap = Number(e.patientCap);
       if (cap > 0 && !e.isManager && !e.salaryOnly) out.patientCap = Math.round(cap);
       else delete out.patientCap;
+      const pto = Number(e.ptoDays);
+      if (pto > 0) out.ptoDays = pto;
+      else delete out.ptoDays;
       if (out.isManager) {
         delete out.managedBy;
       } else if (!e.salaryOnly) {
@@ -1570,7 +1578,16 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
         placeholder: "none",
         onChange: (e) => setSalary(emp.id, e.target.value)
       }
-    ), Number(emp.annualSalary) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, money(Number(emp.annualSalary) / 26), " biweekly")), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Patient cap ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "salary-covered")), /* @__PURE__ */ React.createElement(
+    ), Number(emp.annualSalary) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, money(Number(emp.annualSalary) / 26), " biweekly")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "PTO days ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "annual; blank = none (1099)")), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        inputMode: "decimal",
+        value: emp.ptoDays ?? "",
+        placeholder: "none",
+        onChange: (e) => setPtoDays(emp.id, e.target.value)
+      }
+    ))), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Patient cap ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "salary-covered")), /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "text",
