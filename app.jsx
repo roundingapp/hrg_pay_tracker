@@ -27,6 +27,8 @@ const OTHER_ENABLED = false;
 const PTO_ENABLED = false;
 const PTO_TEST_USERS = new Set(["nsutaria"]);
 const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username||"").trim().toLowerCase());
+// a person sees PTO only if the feature is on for them AND they actually have a PTO allowance (>0)
+const ptoEligible = (emp) => !!emp && ptoVisibleFor(emp.username) && Number(emp.ptoDays) > 0;
 // local-date YYYY-MM-DD for a Date object (calendar cells are local, not UTC)
 const localISO = (dt) => dt.getFullYear() + "-" + String(dt.getMonth()+1).padStart(2,"0") + "-" + String(dt.getDate()).padStart(2,"0");
 const ptoDayValue = (r) => (r && r.half ? 0.5 : 1);
@@ -829,8 +831,8 @@ function App() {
                 audit={true} baseSalary={salaries[impersonate.id]}
                 empAdj={(() => { const o = {}; for (const [p, byEmp] of Object.entries(adjustments||{})) if (byEmp && byEmp[impersonate.id]) o[p] = byEmp[impersonate.id]; return o; })()}
                 pto={allPto.filter(r => r.empId === impersonate.id)} ptoAllowance={impersonate.ptoDays}
-                onRequestPto={ptoVisibleFor(impersonate.username) ? requestPtoForImpersonated : undefined}
-                onCancelPto={ptoVisibleFor(impersonate.username) ? cancelPtoForImpersonated : undefined}
+                onRequestPto={ptoEligible(impersonate) ? requestPtoForImpersonated : undefined}
+                onCancelPto={ptoEligible(impersonate) ? cancelPtoForImpersonated : undefined}
                 showToast={showToast} />}
         </>
       )}
@@ -853,8 +855,8 @@ function App() {
               ? <div className="card"><div className="empty">Your hours are entered for you — there's nothing to log here. Reach out to the office if something looks off.</div></div>
               : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} baseSalary={mySalary} empAdj={myAdj}
                   pto={pto} ptoAllowance={myEmp && myEmp.ptoDays}
-                  onRequestPto={ptoVisibleFor(myEmp && myEmp.username) ? requestPto : undefined}
-                  onCancelPto={ptoVisibleFor(myEmp && myEmp.username) ? cancelPto : undefined}
+                  onRequestPto={ptoEligible(myEmp) ? requestPto : undefined}
+                  onCancelPto={ptoEligible(myEmp) ? cancelPto : undefined}
                   showToast={showToast} />
       )}
 
@@ -2083,7 +2085,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                     )}
                   </div>
                   <div>
-                    <label>PTO days <span className="hint-sm">annual; blank = none (1099)</span></label>
+                    <label>PTO days <span className="hint-sm">annual; blank = none</span></label>
                     <input type="text" inputMode="decimal" value={emp.ptoDays ?? ""} placeholder="none"
                       onChange={e=>setPtoDays(emp.id, e.target.value)} />
                   </div>

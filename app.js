@@ -19,6 +19,7 @@ const OTHER_ENABLED = false;
 const PTO_ENABLED = false;
 const PTO_TEST_USERS = /* @__PURE__ */ new Set(["nsutaria"]);
 const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username || "").trim().toLowerCase());
+const ptoEligible = (emp) => !!emp && ptoVisibleFor(emp.username) && Number(emp.ptoDays) > 0;
 const localISO = (dt) => dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0");
 const ptoDayValue = (r) => r && r.half ? 0.5 : 1;
 const isFixed = (key) => FIXED.some((f) => f.key === key);
@@ -781,8 +782,8 @@ function App() {
       })(),
       pto: allPto.filter((r) => r.empId === impersonate.id),
       ptoAllowance: impersonate.ptoDays,
-      onRequestPto: ptoVisibleFor(impersonate.username) ? requestPtoForImpersonated : void 0,
-      onCancelPto: ptoVisibleFor(impersonate.username) ? cancelPtoForImpersonated : void 0,
+      onRequestPto: ptoEligible(impersonate) ? requestPtoForImpersonated : void 0,
+      onCancelPto: ptoEligible(impersonate) ? cancelPtoForImpersonated : void 0,
       showToast
     }
   )), isOwner && !impersonate && /* @__PURE__ */ React.createElement(
@@ -819,8 +820,8 @@ function App() {
       empAdj: myAdj,
       pto,
       ptoAllowance: myEmp && myEmp.ptoDays,
-      onRequestPto: ptoVisibleFor(myEmp && myEmp.username) ? requestPto : void 0,
-      onCancelPto: ptoVisibleFor(myEmp && myEmp.username) ? cancelPto : void 0,
+      onRequestPto: ptoEligible(myEmp) ? requestPto : void 0,
+      onCancelPto: ptoEligible(myEmp) ? cancelPto : void 0,
       showToast
     }
   )), /* @__PURE__ */ React.createElement("div", { className: "toast" + (toast ? " show" : "") }, toast));
@@ -1842,7 +1843,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
         placeholder: "none",
         onChange: (e) => setSalary(emp.id, e.target.value)
       }
-    ), Number(emp.annualSalary) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, money(Number(emp.annualSalary) / 26), " biweekly")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "PTO days ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "annual; blank = none (1099)")), /* @__PURE__ */ React.createElement(
+    ), Number(emp.annualSalary) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, money(Number(emp.annualSalary) / 26), " biweekly")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "PTO days ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "annual; blank = none")), /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "text",
