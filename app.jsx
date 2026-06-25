@@ -23,6 +23,13 @@ const ALL_TYPES = [...FIXED, ...VARIABLE];
 // Employee-entered "Other" one-off amounts are deactivated (abuse vector). All Other logic stays
 // wired (build/save/load/totals) and the roll-up Other column remains — flip to true to re-enable.
 const OTHER_ENABLED = false;
+// PTO feature: gated to a test set for now. Flip PTO_ENABLED=true to turn it on for all staff.
+const PTO_ENABLED = false;
+const PTO_TEST_USERS = new Set(["nsutaria"]);
+const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username||"").trim().toLowerCase());
+// local-date YYYY-MM-DD for a Date object (calendar cells are local, not UTC)
+const localISO = (dt) => dt.getFullYear() + "-" + String(dt.getMonth()+1).padStart(2,"0") + "-" + String(dt.getDate()).padStart(2,"0");
+const ptoDayValue = (r) => (r && r.half ? 0.5 : 1);
 const isFixed = key => FIXED.some(f => f.key === key);
 const isDecimal = key => VARIABLE.some(v => v.key === key && v.decimal);
 // dollar value of a counts map for a given employee (per-emp rates for variable types)
@@ -190,6 +197,27 @@ async function loadAllEntries() {
     return all;
   } catch (e) { console.error("all-entries read failed", e); return []; }
 }
+/* ---------- PTO (collection "pto", one doc per auth uid) ----------
+   Shape: { value: [ {id, empId, date, half, status:"requested"|"approved", requestedAt, approvedAt, deniedAt} ] }
+   Each user reads/writes only their own; the owner reads/writes all (approve/deny/enter-on-behalf). */
+async function loadPto(uid) {
+  try {
+    const snap = await window._fs.getDoc(window._fs.doc(window._db, "pto", uid));
+    return (snap.exists() && Array.isArray(snap.data()?.value)) ? snap.data().value : [];
+  } catch (e) { return []; }
+}
+async function savePto(uid, list) {
+  try { await window._fs.setDoc(window._fs.doc(window._db, "pto", uid), { value: list }); return true; }
+  catch (e) { console.error("pto write failed", e); return false; }
+}
+async function loadAllPto() {
+  try {
+    const snap = await window._fs.getDocs(window._fs.collection(window._db, "pto"));
+    const all = [];
+    snap.forEach(d => { const v = d.data()?.value; if (Array.isArray(v)) v.forEach(r => all.push({ ...r, _uid: d.id })); });
+    return all;
+  } catch (e) { console.error("all-pto read failed", e); return []; }
+}
 // Annual salaries (owner-only): stored at paytracker_entries/<SALARY_DOC>. The existing rule on
 // that collection is `isOwner() || auth.uid == docId` — and no staff account's uid can equal the
 // literal "salaries", so this doc is owner-only with no rules change. Shape: { value: {empId: annual} }.
@@ -329,6 +357,79 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, sh
   );
 }
 
+// PTO request calendar (modal): month view, weekdays only, tap a day to cycle full → ½ → off.
+function PtoCalendar({ pto, allowance, onSubmit, onClose }) {
+  const todayStr = todayISO();
+  const t0 = parseDate(todayStr);
+  const [calY, setCalY] = useState(t0.getFullYear());
+  const [calM, setCalM] = useState(t0.getMonth());
+  const [sel, setSel] = useState({});
+
+  const byDate = {};
+  for (const r of (pto||[])) byDate[r.date] = r;
+  const yr = String(t0.getFullYear());
+  const usedApproved = (pto||[]).filter(r => r.status === "approved" && String(r.date||"").slice(0,4) === yr)
+    .reduce((s,r) => s + ptoDayValue(r), 0);
+  const selDays = Object.values(sel).reduce((s,v) => s + (v.half ? 0.5 : 1), 0);
+  const allow = Number(allowance) || 0;
+  const remaining = Math.max(0, allow - usedApproved);
+
+  const first = new Date(calY, calM, 1);
+  const monthName = first.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const cells = [];
+  for (let i=0; i<first.getDay(); i++) cells.push(null);
+  const dim = new Date(calY, calM+1, 0).getDate();
+  for (let d=1; d<=dim; d++) cells.push(new Date(calY, calM, d));
+
+  const cycle = (ds) => setSel(s => {
+    const cur = s[ds]; const next = { ...s };
+    if (!cur) next[ds] = { half:false };
+    else if (!cur.half) next[ds] = { half:true };
+    else delete next[ds];
+    return next;
+  });
+  const prevM = () => { if (calM===0){ setCalM(11); setCalY(calY-1);} else setCalM(calM-1); };
+  const nextM = () => { if (calM===11){ setCalM(0); setCalY(calY+1);} else setCalM(calM+1); };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal pto-modal" onClick={e=>e.stopPropagation()}>
+        <div className="pto-head"><h3>Request PTO</h3><button className="btn btn-ghost" style={{padding:"4px 10px"}} onClick={onClose}>✕</button></div>
+        <div className="pto-counter"><strong>{remaining}</strong> of {allow} day{allow===1?"":"s"} left{selDays>0 ? <span> · requesting {selDays}</span> : null}</div>
+        <div className="pto-monthnav"><button onClick={prevM} aria-label="Previous month">‹</button><span>{monthName}</span><button onClick={nextM} aria-label="Next month">›</button></div>
+        <div className="pto-grid">
+          {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d,i)=><div key={"dow"+i} className="pto-dow">{d[0]}</div>)}
+          {cells.map((dt,i) => {
+            if (!dt) return <div key={"b"+i} className="pto-cell blank" />;
+            const ds = localISO(dt);
+            const dow = dt.getDay();
+            const weekend = dow===0 || dow===6;
+            const past = ds < todayStr;
+            const ex = byDate[ds];
+            const ss = sel[ds];
+            const locked = weekend || past || (ex && (ex.status==="approved" || ex.status==="requested"));
+            let cls = "pto-cell";
+            if (ex && ex.status==="approved") cls += " approved";
+            else if (ex && ex.status==="requested") cls += " requested";
+            else if (ss) cls += ss.half ? " sel half" : " sel";
+            else if (weekend || past) cls += " muted";
+            return (
+              <div key={ds} className={cls} onClick={()=>{ if(!locked) cycle(ds); }}>
+                {dt.getDate()}{((ss && ss.half) || (ex && ex.half)) ? <span className="half-mark">½</span> : null}
+              </div>
+            );
+          })}
+        </div>
+        <div className="pto-legend"><span className="lg sel" /> requested&nbsp;&nbsp;<span className="lg approved" /> approved · tap to cycle full → ½ → off</div>
+        <div className="pto-actions">
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={selDays===0} onClick={()=>onSubmit(sel)}>Submit{selDays>0 ? " ("+selDays+"d)" : ""}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [loaded, setLoaded] = useState(false);
   const [syncedAt, setSyncedAt] = useState(null);        // when data was last pulled fresh from the server
@@ -341,6 +442,8 @@ function App() {
   const [mySalary, setMySalary] = useState(0);    // the signed-in NP's own salary (from their own doc)
   const [adjustments, setAdjustments] = useState({});  // owner-only roll-up overrides {periodIdx:{empId:{...}}}
   const [myAdj, setMyAdj] = useState({});         // the signed-in NP's own bonus/reimbursement by period
+  const [pto, setPto] = useState([]);             // the signed-in user's own PTO records
+  const [allPto, setAllPto] = useState([]);       // owner: everyone's PTO (for the approval tab)
   const [impersonate, setImpersonate] = useState(null);       // owner "view as" target employee (or null)
   const [impersonateDoc, setImpersonateDoc] = useState(null); // the entries doc that employee's data lives in
   const [impersonateCerts, setImpersonateCerts] = useState({});
@@ -368,7 +471,7 @@ function App() {
     if (!u) { setEmployees([]); setEntries([]); setManualLocks([]); return; }
     const owner = isOwnerUser(u);
     // fire every read at once (they're independent) — was 8 sequential round-trips
-    const [emps, locks, entries, certs, salaries, mySalary, adjustments, myAdj] = await Promise.all([
+    const [emps, locks, entries, certs, salaries, mySalary, adjustments, myAdj, myPto, everyPto] = await Promise.all([
       sGet("employees", null),
       sGet("manualLocks", []),
       owner ? loadAllEntries() : loadEntriesForUid(u.uid),
@@ -377,6 +480,8 @@ function App() {
       owner ? Promise.resolve(0) : loadMySalary(u.uid),
       owner ? loadAdjustments() : Promise.resolve({}),
       owner ? Promise.resolve({}) : loadMyAdj(u.uid),
+      loadPto(u.uid),                                  // the user's own PTO (owner has one too)
+      owner ? loadAllPto() : Promise.resolve([]),      // owner: everyone's PTO
     ]);
     setEmployees(emps && emps.length ? emps : []);
     setManualLocks(Array.isArray(locks) ? locks : []);
@@ -386,6 +491,8 @@ function App() {
     setMySalary(mySalary);
     setAdjustments(adjustments);
     setMyAdj(myAdj);
+    setPto(Array.isArray(myPto) ? myPto : []);
+    setAllPto(Array.isArray(everyPto) ? everyPto : []);
     setSyncedAt(new Date());     // mark data as freshly pulled
   }, []);
 
@@ -482,6 +589,21 @@ function App() {
     setCerts(c => ({ ...c, [String(periodIdx)]: { cap, at } }));
     await saveCertForUid(uid, periodIdx, cap, at);
   }, [uid]);
+  // user submits a batch of requested PTO dates (sel = { "YYYY-MM-DD": {half} })
+  const requestPto = useCallback(async (sel) => {
+    if (!uid) return;
+    const empId = (myEmp && myEmp.id) || null;
+    const now = new Date().toISOString();
+    const latest = await loadPto(uid);
+    const taken = new Set(latest.map(r => r.date));
+    const fresh = Object.entries(sel || {})
+      .filter(([date]) => !taken.has(date))
+      .map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2,6), empId, date, half: !!(v && v.half), status: "requested", requestedAt: now }));
+    if (!fresh.length) return;
+    const merged = [...latest, ...fresh];
+    setPto(merged);
+    await savePto(uid, merged);
+  }, [uid, myEmp]);
 
   // owner "view as employee": find which entries doc their data lives in (their own uid, the manager's
   // doc for managed staff, or their empId as a fallback) and load their certs so the view matches theirs.
@@ -588,7 +710,10 @@ function App() {
             ? <ManagerView manager={myEmp} employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast} />
             : myEmp.managedBy
               ? <div className="card"><div className="empty">Your hours are entered for you — there's nothing to log here. Reach out to the office if something looks off.</div></div>
-              : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} baseSalary={mySalary} empAdj={myAdj} showToast={showToast} />
+              : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} baseSalary={mySalary} empAdj={myAdj}
+                  pto={pto} ptoAllowance={myEmp && myEmp.ptoDays}
+                  onRequestPto={ptoVisibleFor(myEmp && myEmp.username) ? requestPto : undefined}
+                  showToast={showToast} />
       )}
 
       <div className={"toast"+(toast?" show":"")}>{toast}</div>
@@ -766,7 +891,11 @@ function OwnerLogin({ showToast }) {
 }
 
 /* ---------- entry view ---------- */
-function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj }) {
+function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, onRequestPto }) {
+  const [ptoOpen, setPtoOpen] = useState(false);
+  const ptoEnabled = !!onRequestPto;   // only passed for the staff member's own screen, gated to test users
+  const approvedPto = (pto || []).filter(r => r.status === "approved" && r.date >= todayISO())
+    .sort((a,b) => a.date.localeCompare(b.date));
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
@@ -889,8 +1018,19 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
 
   return (
     <div className="card">
+      {ptoOpen && <PtoCalendar pto={pto} allowance={ptoAllowance}
+        onClose={()=>setPtoOpen(false)}
+        onSubmit={(sel)=>{ onRequestPto(sel); setPtoOpen(false); showToast && showToast("PTO request submitted"); }} />}
       <h2>Log your work</h2>
       <p className="hint">Logging as <strong>{emp.name}</strong> (@{normU(emp.username)}). Tap a day below to add or edit it.</p>
+      {ptoEnabled && (
+        <div className="pto-banner">
+          {approvedPto.length > 0 && (
+            <div className="pto-approved-line">✅ Approved PTO: {approvedPto.map(r => fmtShort(r.date) + (r.half ? " (½)" : "")).join(", ")}</div>
+          )}
+          <div>To request PTO, <a className="pto-link" onClick={()=>setPtoOpen(true)}>click here</a>.</div>
+        </div>
+      )}
 
       {emp && (
         <>

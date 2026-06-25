@@ -16,6 +16,11 @@ const VARIABLE = [
 ];
 const ALL_TYPES = [...FIXED, ...VARIABLE];
 const OTHER_ENABLED = false;
+const PTO_ENABLED = false;
+const PTO_TEST_USERS = /* @__PURE__ */ new Set(["nsutaria"]);
+const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username || "").trim().toLowerCase());
+const localISO = (dt) => dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0");
+const ptoDayValue = (r) => r && r.half ? 0.5 : 1;
 const isFixed = (key) => FIXED.some((f) => f.key === key);
 const isDecimal = (key) => VARIABLE.some((v) => v.key === key && v.decimal);
 const payForCounts = (counts, emp) => ALL_TYPES.reduce((s, t) => {
@@ -190,6 +195,37 @@ async function loadAllEntries() {
     return [];
   }
 }
+async function loadPto(uid) {
+  try {
+    const snap = await window._fs.getDoc(window._fs.doc(window._db, "pto", uid));
+    return snap.exists() && Array.isArray(snap.data()?.value) ? snap.data().value : [];
+  } catch (e) {
+    return [];
+  }
+}
+async function savePto(uid, list) {
+  try {
+    await window._fs.setDoc(window._fs.doc(window._db, "pto", uid), { value: list });
+    return true;
+  } catch (e) {
+    console.error("pto write failed", e);
+    return false;
+  }
+}
+async function loadAllPto() {
+  try {
+    const snap = await window._fs.getDocs(window._fs.collection(window._db, "pto"));
+    const all = [];
+    snap.forEach((d) => {
+      const v = d.data()?.value;
+      if (Array.isArray(v)) v.forEach((r) => all.push({ ...r, _uid: d.id }));
+    });
+    return all;
+  } catch (e) {
+    console.error("all-pto read failed", e);
+    return [];
+  }
+}
 const SALARY_DOC = "salaries";
 async function loadSalaries() {
   try {
@@ -327,6 +363,64 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, sh
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("h2", { style: { marginTop: 0 } }, "Enter hours for staff"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Pick whose hours you're entering, then fill their days below. Switching keeps each person separate."), /* @__PURE__ */ React.createElement("div", { className: "manager-picker" }, managed.map((e) => /* @__PURE__ */ React.createElement("button", { key: e.id, className: "btn " + (sel && e.id === sel.id ? "btn-primary" : "btn-ghost"), onClick: () => setSelId(e.id) }, e.name)))), sel && /* @__PURE__ */ React.createElement(EntryView, { key: sel.id, emp: sel, entries, upsertEntry, certs: {}, certifyPeriod: () => {
   }, manualLocks, showToast }));
 }
+function PtoCalendar({ pto, allowance, onSubmit, onClose }) {
+  const todayStr = todayISO();
+  const t0 = parseDate(todayStr);
+  const [calY, setCalY] = useState(t0.getFullYear());
+  const [calM, setCalM] = useState(t0.getMonth());
+  const [sel, setSel] = useState({});
+  const byDate = {};
+  for (const r of pto || []) byDate[r.date] = r;
+  const yr = String(t0.getFullYear());
+  const usedApproved = (pto || []).filter((r) => r.status === "approved" && String(r.date || "").slice(0, 4) === yr).reduce((s, r) => s + ptoDayValue(r), 0);
+  const selDays = Object.values(sel).reduce((s, v) => s + (v.half ? 0.5 : 1), 0);
+  const allow = Number(allowance) || 0;
+  const remaining = Math.max(0, allow - usedApproved);
+  const first = new Date(calY, calM, 1);
+  const monthName = first.toLocaleDateString(void 0, { month: "long", year: "numeric" });
+  const cells = [];
+  for (let i = 0; i < first.getDay(); i++) cells.push(null);
+  const dim = new Date(calY, calM + 1, 0).getDate();
+  for (let d = 1; d <= dim; d++) cells.push(new Date(calY, calM, d));
+  const cycle = (ds) => setSel((s) => {
+    const cur = s[ds];
+    const next = { ...s };
+    if (!cur) next[ds] = { half: false };
+    else if (!cur.half) next[ds] = { half: true };
+    else delete next[ds];
+    return next;
+  });
+  const prevM = () => {
+    if (calM === 0) {
+      setCalM(11);
+      setCalY(calY - 1);
+    } else setCalM(calM - 1);
+  };
+  const nextM = () => {
+    if (calM === 11) {
+      setCalM(0);
+      setCalY(calY + 1);
+    } else setCalM(calM + 1);
+  };
+  return /* @__PURE__ */ React.createElement("div", { className: "modal-backdrop", onClick: onClose }, /* @__PURE__ */ React.createElement("div", { className: "modal pto-modal", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { className: "pto-head" }, /* @__PURE__ */ React.createElement("h3", null, "Request PTO"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: { padding: "4px 10px" }, onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { className: "pto-counter" }, /* @__PURE__ */ React.createElement("strong", null, remaining), " of ", allow, " day", allow === 1 ? "" : "s", " left", selDays > 0 ? /* @__PURE__ */ React.createElement("span", null, " \xB7 requesting ", selDays) : null), /* @__PURE__ */ React.createElement("div", { className: "pto-monthnav" }, /* @__PURE__ */ React.createElement("button", { onClick: prevM, "aria-label": "Previous month" }, "\u2039"), /* @__PURE__ */ React.createElement("span", null, monthName), /* @__PURE__ */ React.createElement("button", { onClick: nextM, "aria-label": "Next month" }, "\u203A")), /* @__PURE__ */ React.createElement("div", { className: "pto-grid" }, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => /* @__PURE__ */ React.createElement("div", { key: "dow" + i, className: "pto-dow" }, d[0])), cells.map((dt, i) => {
+    if (!dt) return /* @__PURE__ */ React.createElement("div", { key: "b" + i, className: "pto-cell blank" });
+    const ds = localISO(dt);
+    const dow = dt.getDay();
+    const weekend = dow === 0 || dow === 6;
+    const past = ds < todayStr;
+    const ex = byDate[ds];
+    const ss = sel[ds];
+    const locked = weekend || past || ex && (ex.status === "approved" || ex.status === "requested");
+    let cls = "pto-cell";
+    if (ex && ex.status === "approved") cls += " approved";
+    else if (ex && ex.status === "requested") cls += " requested";
+    else if (ss) cls += ss.half ? " sel half" : " sel";
+    else if (weekend || past) cls += " muted";
+    return /* @__PURE__ */ React.createElement("div", { key: ds, className: cls, onClick: () => {
+      if (!locked) cycle(ds);
+    } }, dt.getDate(), ss && ss.half || ex && ex.half ? /* @__PURE__ */ React.createElement("span", { className: "half-mark" }, "\xBD") : null);
+  })), /* @__PURE__ */ React.createElement("div", { className: "pto-legend" }, /* @__PURE__ */ React.createElement("span", { className: "lg sel" }), " requested\xA0\xA0", /* @__PURE__ */ React.createElement("span", { className: "lg approved" }), " approved \xB7 tap to cycle full \u2192 \xBD \u2192 off"), /* @__PURE__ */ React.createElement("div", { className: "pto-actions" }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: onClose }, "Cancel"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-primary", disabled: selDays === 0, onClick: () => onSubmit(sel) }, "Submit", selDays > 0 ? " (" + selDays + "d)" : ""))));
+}
 function App() {
   const [loaded, setLoaded] = useState(false);
   const [syncedAt, setSyncedAt] = useState(null);
@@ -339,6 +433,8 @@ function App() {
   const [mySalary, setMySalary] = useState(0);
   const [adjustments, setAdjustments] = useState({});
   const [myAdj, setMyAdj] = useState({});
+  const [pto, setPto] = useState([]);
+  const [allPto, setAllPto] = useState([]);
   const [impersonate, setImpersonate] = useState(null);
   const [impersonateDoc, setImpersonateDoc] = useState(null);
   const [impersonateCerts, setImpersonateCerts] = useState({});
@@ -363,7 +459,7 @@ function App() {
       return;
     }
     const owner = isOwnerUser(u);
-    const [emps, locks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2] = await Promise.all([
+    const [emps, locks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2, myPto, everyPto] = await Promise.all([
       sGet("employees", null),
       sGet("manualLocks", []),
       owner ? loadAllEntries() : loadEntriesForUid(u.uid),
@@ -371,7 +467,11 @@ function App() {
       owner ? loadSalaries() : Promise.resolve({}),
       owner ? Promise.resolve(0) : loadMySalary(u.uid),
       owner ? loadAdjustments() : Promise.resolve({}),
-      owner ? Promise.resolve({}) : loadMyAdj(u.uid)
+      owner ? Promise.resolve({}) : loadMyAdj(u.uid),
+      loadPto(u.uid),
+      // the user's own PTO (owner has one too)
+      owner ? loadAllPto() : Promise.resolve([])
+      // owner: everyone's PTO
     ]);
     setEmployees(emps && emps.length ? emps : []);
     setManualLocks(Array.isArray(locks) ? locks : []);
@@ -381,6 +481,8 @@ function App() {
     setMySalary(mySalary2);
     setAdjustments(adjustments2);
     setMyAdj(myAdj2);
+    setPto(Array.isArray(myPto) ? myPto : []);
+    setAllPto(Array.isArray(everyPto) ? everyPto : []);
     setSyncedAt(/* @__PURE__ */ new Date());
   }, []);
   useEffect(() => {
@@ -478,6 +580,18 @@ function App() {
     setCerts((c) => ({ ...c, [String(periodIdx)]: { cap, at } }));
     await saveCertForUid(uid, periodIdx, cap, at);
   }, [uid]);
+  const requestPto = useCallback(async (sel) => {
+    if (!uid) return;
+    const empId = myEmp && myEmp.id || null;
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const latest = await loadPto(uid);
+    const taken = new Set(latest.map((r) => r.date));
+    const fresh = Object.entries(sel || {}).filter(([date]) => !taken.has(date)).map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2, 6), empId, date, half: !!(v && v.half), status: "requested", requestedAt: now }));
+    if (!fresh.length) return;
+    const merged = [...latest, ...fresh];
+    setPto(merged);
+    await savePto(uid, merged);
+  }, [uid, myEmp]);
   const startImpersonate = useCallback(async (emp) => {
     if (!emp) return;
     let docId;
@@ -583,7 +697,23 @@ function App() {
       onRefresh: refresh,
       showToast
     }
-  ), authUser && !isOwner && (!myEmp ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees & rates, then sign out and back in.")) : myEmp.isManager ? /* @__PURE__ */ React.createElement(ManagerView, { manager: myEmp, employees, entries, upsertEntry, manualLocks, showToast }) : myEmp.managedBy ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "Your hours are entered for you \u2014 there's nothing to log here. Reach out to the office if something looks off.")) : /* @__PURE__ */ React.createElement(EntryView, { emp: myEmp, entries, upsertEntry, certs, certifyPeriod, manualLocks, baseSalary: mySalary, empAdj: myAdj, showToast })), /* @__PURE__ */ React.createElement("div", { className: "toast" + (toast ? " show" : "") }, toast));
+  ), authUser && !isOwner && (!myEmp ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees & rates, then sign out and back in.")) : myEmp.isManager ? /* @__PURE__ */ React.createElement(ManagerView, { manager: myEmp, employees, entries, upsertEntry, manualLocks, showToast }) : myEmp.managedBy ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "Your hours are entered for you \u2014 there's nothing to log here. Reach out to the office if something looks off.")) : /* @__PURE__ */ React.createElement(
+    EntryView,
+    {
+      emp: myEmp,
+      entries,
+      upsertEntry,
+      certs,
+      certifyPeriod,
+      manualLocks,
+      baseSalary: mySalary,
+      empAdj: myAdj,
+      pto,
+      ptoAllowance: myEmp && myEmp.ptoDays,
+      onRequestPto: ptoVisibleFor(myEmp && myEmp.username) ? requestPto : void 0,
+      showToast
+    }
+  )), /* @__PURE__ */ React.createElement("div", { className: "toast" + (toast ? " show" : "") }, toast));
 }
 function LoginScreen({ showToast }) {
   const [mode, setMode] = useState("np");
@@ -747,7 +877,10 @@ function OwnerLogin({ showToast }) {
   };
   return /* @__PURE__ */ React.createElement("form", { onSubmit: submit }, /* @__PURE__ */ React.createElement("h2", null, "Admin sign in"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "For pay rates and the full roll-up. Your browser can save this."), /* @__PURE__ */ React.createElement("label", null, "Email"), /* @__PURE__ */ React.createElement("input", { type: "email", autoComplete: "username", value: email, onChange: (e) => setEmail(e.target.value), placeholder: "you@example.com", autoFocus: true }), /* @__PURE__ */ React.createElement("div", { style: { height: 12 } }), /* @__PURE__ */ React.createElement("label", null, "Password"), /* @__PURE__ */ React.createElement("input", { type: "password", autoComplete: "current-password", value: pw, onChange: (e) => setPw(e.target.value) }), err && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 8 } }, err), /* @__PURE__ */ React.createElement("div", { style: { height: 14 } }), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn btn-primary", style: { width: "100%" }, disabled: busy }, busy ? "Signing in\u2026" : "Sign in"));
 }
-function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj }) {
+function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, onRequestPto }) {
+  const [ptoOpen, setPtoOpen] = useState(false);
+  const ptoEnabled = !!onRequestPto;
+  const approvedPto = (pto || []).filter((r) => r.status === "approved" && r.date >= todayISO()).sort((a, b) => a.date.localeCompare(b.date));
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
@@ -872,7 +1005,19 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     const id = setTimeout(() => saveEntry(), 700);
     return () => clearTimeout(id);
   }, [entryDirty, counts, otherOn, otherAmt, otherNote]);
-  return /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("h2", null, "Log your work"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Logging as ", /* @__PURE__ */ React.createElement("strong", null, emp.name), " (@", normU(emp.username), "). Tap a day below to add or edit it."), emp && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 22 } }), /* @__PURE__ */ React.createElement("div", { className: "period-nav" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
+  return /* @__PURE__ */ React.createElement("div", { className: "card" }, ptoOpen && /* @__PURE__ */ React.createElement(
+    PtoCalendar,
+    {
+      pto,
+      allowance: ptoAllowance,
+      onClose: () => setPtoOpen(false),
+      onSubmit: (sel) => {
+        onRequestPto(sel);
+        setPtoOpen(false);
+        showToast && showToast("PTO request submitted");
+      }
+    }
+  ), /* @__PURE__ */ React.createElement("h2", null, "Log your work"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Logging as ", /* @__PURE__ */ React.createElement("strong", null, emp.name), " (@", normU(emp.username), "). Tap a day below to add or edit it."), ptoEnabled && /* @__PURE__ */ React.createElement("div", { className: "pto-banner" }, approvedPto.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "pto-approved-line" }, "\u2705 Approved PTO: ", approvedPto.map((r) => fmtShort(r.date) + (r.half ? " (\xBD)" : "")).join(", ")), /* @__PURE__ */ React.createElement("div", null, "To request PTO, ", /* @__PURE__ */ React.createElement("a", { className: "pto-link", onClick: () => setPtoOpen(true) }, "click here"), ".")), emp && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 22 } }), /* @__PURE__ */ React.createElement("div", { className: "period-nav" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
     flushEntry();
     setPeriodIdx((i) => i - 1);
   }, "aria-label": "Previous pay period" }, "\u2039"), /* @__PURE__ */ React.createElement("div", { className: "pn-label" }, fmtShortYr(period.start), " \u2013 ", fmtShortYr(period.end)), /* @__PURE__ */ React.createElement("button", { onClick: () => {
