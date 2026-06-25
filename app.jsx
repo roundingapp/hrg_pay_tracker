@@ -435,6 +435,74 @@ function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
   );
 }
 
+// Admin PTO tab: approve/deny requests (single or batch), overlap flags, enter PTO on someone's behalf.
+function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
+  const [addFor, setAddFor] = useState(null);
+  const nameOf = (empId) => { const e = employees.find(x => x.id === empId); return e ? lastFirst(e.name) : empId; };
+  const sortedEmps = employees.filter(e => !e.salaryOnly).slice().sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
+  const sm = { padding: "5px 11px", fontSize: 13 };
+
+  const pending = (allPto || []).filter(r => r.status === "requested").slice().sort((a,b) => a.date.localeCompare(b.date));
+  const groups = {};
+  for (const r of pending) (groups[r.empId] = groups[r.empId] || []).push(r);
+
+  // who's off (requested or approved) by date → overlap detection
+  const byDate = {};
+  for (const r of (allPto || [])) if (r.status === "requested" || r.status === "approved") (byDate[r.date] = byDate[r.date] || []).push(r);
+  const overlapsFor = (rec) => (byDate[rec.date] || []).filter(o => o.empId !== rec.empId);
+
+  return (
+    <div className="card">
+      <h2>Time off</h2>
+      <p className="hint">Approve or deny requested PTO — one at a time or all of a person's at once. ⚠ marks days when someone else is also off.</p>
+
+      <div className="emp-section">
+        <label>Enter PTO for someone (added as approved)</label>
+        <select value="" onChange={e=>{ const emp = employees.find(x=>x.id===e.target.value); if (emp) setAddFor(emp); }} style={{maxWidth:340}}>
+          <option value="">Choose an employee…</option>
+          {sortedEmps.map(e => <option key={e.id} value={e.id}>{lastFirst(e.name)}</option>)}
+        </select>
+      </div>
+      {addFor && <PtoCalendar pto={allPto.filter(r=>r.empId===addFor.id)} allowance={addFor.ptoDays}
+        onClose={()=>setAddFor(null)}
+        onSubmit={(sel)=>{ onAddPto(addFor, sel); setAddFor(null); showToast && showToast("PTO added for " + addFor.name); }} />}
+
+      <div className="emp-section">
+        {Object.keys(groups).length === 0
+          ? <div className="empty">No pending PTO requests.</div>
+          : Object.entries(groups).map(([empId, recs]) => {
+              const dc = recs.reduce((s,r) => s + (r.half ? 0.5 : 1), 0);
+              const items = recs.map(r => ({ _uid: r._uid, id: r.id }));
+              return (
+                <div className="pto-group" key={empId}>
+                  <div className="pto-group-head">
+                    <strong>{nameOf(empId)}</strong>
+                    <span className="pto-group-count">{dc} day{dc===1?"":"s"} requested</span>
+                    <span style={{marginLeft:"auto", whiteSpace:"nowrap"}}>
+                      <button className="btn btn-ghost" style={sm} onClick={()=>onSetStatus(items, "approved")}>Approve all</button>
+                      <button className="btn btn-danger" style={{...sm, marginLeft:8}} onClick={()=>onSetStatus(items, null)}>Deny all</button>
+                    </span>
+                  </div>
+                  {recs.map(r => {
+                    const ov = overlapsFor(r);
+                    return (
+                      <div className="pto-req" key={r.id}>
+                        <span>{fmtShortYr(r.date)}{r.half ? " · ½ day" : ""}{ov.length ? <span className="pto-overlap"> ⚠ also off: {ov.map(o=>nameOf(o.empId)).join(", ")}</span> : null}</span>
+                        <span style={{whiteSpace:"nowrap"}}>
+                          <button className="btn btn-ghost" style={sm} onClick={()=>onSetStatus([{_uid:r._uid,id:r.id}], "approved")}>Approve</button>
+                          <button className="btn btn-danger" style={{...sm, marginLeft:8}} onClick={()=>onSetStatus([{_uid:r._uid,id:r.id}], null)}>Deny</button>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [loaded, setLoaded] = useState(false);
   const [syncedAt, setSyncedAt] = useState(null);        // when data was last pulled fresh from the server
@@ -564,6 +632,35 @@ function App() {
       if (docId) await saveMyAdj(docId, perPeriod);
     }
   }, [entries]);
+  // owner approves (status→approved) or denies (removes) PTO requests; items = [{_uid, id}]
+  const setPtoStatus = useCallback(async (items, newStatus) => {
+    const byUid = {};
+    for (const it of items) (byUid[it._uid] = byUid[it._uid] || []).push(it.id);
+    const now = new Date().toISOString();
+    for (const [docId, ids] of Object.entries(byUid)) {
+      const latest = await loadPto(docId);
+      const next = newStatus === null
+        ? latest.filter(r => !ids.includes(r.id))                                                   // deny = remove
+        : latest.map(r => ids.includes(r.id) ? { ...r, status: newStatus, approvedAt: now } : r);   // approve
+      await savePto(docId, next);
+    }
+    setAllPto(await loadAllPto());
+  }, []);
+  // owner enters PTO for someone (added directly as approved) — writes to THEIR pto doc
+  const addPtoForEmployee = useCallback(async (emp, sel) => {
+    if (!emp) return;
+    const docId = (allPto.find(r => r.empId === emp.id) || {})._uid
+      || (entries.find(e => e.empId === emp.id) || {})._uid || emp.id;
+    const now = new Date().toISOString();
+    const latest = await loadPto(docId);
+    const taken = new Set(latest.map(r => r.date));
+    const fresh = Object.entries(sel || {})
+      .filter(([date]) => !taken.has(date))
+      .map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2,6), empId: emp.id, date, half: !!(v && v.half), status: "approved", approvedAt: now, by: "admin" }));
+    if (!fresh.length) return;
+    await savePto(docId, [...latest, ...fresh]);
+    setAllPto(await loadAllPto());
+  }, [allPto, entries]);
   const toggleLock = useCallback(async (periodIndex) => {
     const latest = await sGet("manualLocks", []);
     const set = new Set(Array.isArray(latest) ? latest : []);
@@ -742,6 +839,7 @@ function App() {
       {isOwner && !impersonate && (
         <OwnerView employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} manualLocks={manualLocks} toggleLock={toggleLock}
           persistEmployees={persistEmployees} persistSalaries={persistSalaries} persistAdjustments={persistAdjustments} deleteEntry={deleteOwnerEntry}
+          allPto={allPto} onSetPtoStatus={setPtoStatus} onAddPto={addPtoForEmployee}
           onViewAs={startImpersonate} syncedAt={syncedAt} onRefresh={refresh} showToast={showToast} />
       )}
 
@@ -1245,7 +1343,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
 }
 
 /* ---------- owner view ---------- */
-function OwnerView({ employees, entries, salaries, adjustments, manualLocks, toggleLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, onViewAs, syncedAt, onRefresh, showToast }) {
+function OwnerView({ employees, entries, salaries, adjustments, manualLocks, toggleLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, allPto, onSetPtoStatus, onAddPto, onViewAs, syncedAt, onRefresh, showToast }) {
   const [sub, setSub] = useState("rollup");
   const [refreshing, setRefreshing] = useState(false);
   const doRefresh = async () => { setRefreshing(true); try { await onRefresh(); } finally { setRefreshing(false); } };
@@ -1259,6 +1357,7 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, tog
           <button className={"tab"+(sub==="rollup"?" active":"")} onClick={()=>setSub("rollup")}>Roll-up</button>
           <button className={"tab"+(sub==="rates"?" active":"")} onClick={()=>setSub("rates")}>Employees &amp; rates</button>
           <button className={"tab"+(sub==="entries"?" active":"")} onClick={()=>setSub("entries")}>All entries</button>
+          <button className={"tab"+(sub==="pto"?" active":"")} onClick={()=>setSub("pto")}>PTO{(() => { const n = (allPto||[]).filter(r=>r.status==="requested").length; return n ? " (" + n + ")" : ""; })()}</button>
         </div>
         <div style={{display:"flex", alignItems:"center", gap:12, flexWrap:"wrap"}}>
           <div style={{display:"flex", alignItems:"center", gap:8, fontSize:12, color:"var(--muted)"}}>
@@ -1276,6 +1375,7 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, tog
       {sub==="rollup"  && <Rollup employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} persistAdjustments={persistAdjustments} manualLocks={manualLocks} toggleLock={toggleLock} showToast={showToast} />}
       {sub==="rates"   && <Rates employees={employees} salaries={salaries} persistEmployees={persistEmployees} persistSalaries={persistSalaries} showToast={showToast} />}
       {sub==="entries" && <AllEntries employees={employees} entries={entries} deleteEntry={deleteEntry} showToast={showToast} />}
+      {sub==="pto"     && <PtoAdmin employees={employees} allPto={allPto} onSetStatus={onSetPtoStatus} onAddPto={onAddPto} showToast={showToast} />}
     </>
   );
 }

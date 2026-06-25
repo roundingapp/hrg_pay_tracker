@@ -427,6 +427,44 @@ function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
     } }, dt.getDate(), ss && ss.half || ex && ex.half ? /* @__PURE__ */ React.createElement("span", { className: "half-mark" }, "\xBD") : null);
   })), /* @__PURE__ */ React.createElement("div", { className: "pto-legend" }, /* @__PURE__ */ React.createElement("span", { className: "lg sel" }), " requested\xA0\xA0\xA0", /* @__PURE__ */ React.createElement("span", { className: "lg approved" }), " approved"), /* @__PURE__ */ React.createElement("div", { className: "pto-actions" }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: onClose }, "Cancel"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-primary", disabled: selDays === 0, onClick: () => onSubmit(sel) }, "Submit", selDays > 0 ? " (" + selDays + "d)" : ""))));
 }
+function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
+  const [addFor, setAddFor] = useState(null);
+  const nameOf = (empId) => {
+    const e = employees.find((x) => x.id === empId);
+    return e ? lastFirst(e.name) : empId;
+  };
+  const sortedEmps = employees.filter((e) => !e.salaryOnly).slice().sort((a, b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
+  const sm = { padding: "5px 11px", fontSize: 13 };
+  const pending = (allPto || []).filter((r) => r.status === "requested").slice().sort((a, b) => a.date.localeCompare(b.date));
+  const groups = {};
+  for (const r of pending) (groups[r.empId] = groups[r.empId] || []).push(r);
+  const byDate = {};
+  for (const r of allPto || []) if (r.status === "requested" || r.status === "approved") (byDate[r.date] = byDate[r.date] || []).push(r);
+  const overlapsFor = (rec) => (byDate[rec.date] || []).filter((o) => o.empId !== rec.empId);
+  return /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("h2", null, "Time off"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Approve or deny requested PTO \u2014 one at a time or all of a person's at once. \u26A0 marks days when someone else is also off."), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("label", null, "Enter PTO for someone (added as approved)"), /* @__PURE__ */ React.createElement("select", { value: "", onChange: (e) => {
+    const emp = employees.find((x) => x.id === e.target.value);
+    if (emp) setAddFor(emp);
+  }, style: { maxWidth: 340 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Choose an employee\u2026"), sortedEmps.map((e) => /* @__PURE__ */ React.createElement("option", { key: e.id, value: e.id }, lastFirst(e.name))))), addFor && /* @__PURE__ */ React.createElement(
+    PtoCalendar,
+    {
+      pto: allPto.filter((r) => r.empId === addFor.id),
+      allowance: addFor.ptoDays,
+      onClose: () => setAddFor(null),
+      onSubmit: (sel) => {
+        onAddPto(addFor, sel);
+        setAddFor(null);
+        showToast && showToast("PTO added for " + addFor.name);
+      }
+    }
+  ), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, Object.keys(groups).length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "empty" }, "No pending PTO requests.") : Object.entries(groups).map(([empId, recs]) => {
+    const dc = recs.reduce((s, r) => s + (r.half ? 0.5 : 1), 0);
+    const items = recs.map((r) => ({ _uid: r._uid, id: r.id }));
+    return /* @__PURE__ */ React.createElement("div", { className: "pto-group", key: empId }, /* @__PURE__ */ React.createElement("div", { className: "pto-group-head" }, /* @__PURE__ */ React.createElement("strong", null, nameOf(empId)), /* @__PURE__ */ React.createElement("span", { className: "pto-group-count" }, dc, " day", dc === 1 ? "" : "s", " requested"), /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", whiteSpace: "nowrap" } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: sm, onClick: () => onSetStatus(items, "approved") }, "Approve all"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", style: { ...sm, marginLeft: 8 }, onClick: () => onSetStatus(items, null) }, "Deny all"))), recs.map((r) => {
+      const ov = overlapsFor(r);
+      return /* @__PURE__ */ React.createElement("div", { className: "pto-req", key: r.id }, /* @__PURE__ */ React.createElement("span", null, fmtShortYr(r.date), r.half ? " \xB7 \xBD day" : "", ov.length ? /* @__PURE__ */ React.createElement("span", { className: "pto-overlap" }, " \u26A0 also off: ", ov.map((o) => nameOf(o.empId)).join(", ")) : null), /* @__PURE__ */ React.createElement("span", { style: { whiteSpace: "nowrap" } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: sm, onClick: () => onSetStatus([{ _uid: r._uid, id: r.id }], "approved") }, "Approve"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", style: { ...sm, marginLeft: 8 }, onClick: () => onSetStatus([{ _uid: r._uid, id: r.id }], null) }, "Deny")));
+    }));
+  })));
+}
 function App() {
   const [loaded, setLoaded] = useState(false);
   const [syncedAt, setSyncedAt] = useState(null);
@@ -559,6 +597,28 @@ function App() {
       if (docId) await saveMyAdj(docId, perPeriod);
     }
   }, [entries]);
+  const setPtoStatus = useCallback(async (items, newStatus) => {
+    const byUid = {};
+    for (const it of items) (byUid[it._uid] = byUid[it._uid] || []).push(it.id);
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    for (const [docId, ids] of Object.entries(byUid)) {
+      const latest = await loadPto(docId);
+      const next = newStatus === null ? latest.filter((r) => !ids.includes(r.id)) : latest.map((r) => ids.includes(r.id) ? { ...r, status: newStatus, approvedAt: now } : r);
+      await savePto(docId, next);
+    }
+    setAllPto(await loadAllPto());
+  }, []);
+  const addPtoForEmployee = useCallback(async (emp, sel) => {
+    if (!emp) return;
+    const docId = (allPto.find((r) => r.empId === emp.id) || {})._uid || (entries.find((e) => e.empId === emp.id) || {})._uid || emp.id;
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const latest = await loadPto(docId);
+    const taken = new Set(latest.map((r) => r.date));
+    const fresh = Object.entries(sel || {}).filter(([date]) => !taken.has(date)).map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2, 6), empId: emp.id, date, half: !!(v && v.half), status: "approved", approvedAt: now, by: "admin" }));
+    if (!fresh.length) return;
+    await savePto(docId, [...latest, ...fresh]);
+    setAllPto(await loadAllPto());
+  }, [allPto, entries]);
   const toggleLock = useCallback(async (periodIndex) => {
     const latest = await sGet("manualLocks", []);
     const set = new Set(Array.isArray(latest) ? latest : []);
@@ -738,6 +798,9 @@ function App() {
       persistSalaries,
       persistAdjustments,
       deleteEntry: deleteOwnerEntry,
+      allPto,
+      onSetPtoStatus: setPtoStatus,
+      onAddPto: addPtoForEmployee,
       onViewAs: startImpersonate,
       syncedAt,
       onRefresh: refresh,
@@ -1163,7 +1226,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     markEntryDirty();
   } }, "Clear"))));
 }
-function OwnerView({ employees, entries, salaries, adjustments, manualLocks, toggleLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, onViewAs, syncedAt, onRefresh, showToast }) {
+function OwnerView({ employees, entries, salaries, adjustments, manualLocks, toggleLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, allPto, onSetPtoStatus, onAddPto, onViewAs, syncedAt, onRefresh, showToast }) {
   const [sub, setSub] = useState("rollup");
   const [refreshing, setRefreshing] = useState(false);
   const doRefresh = async () => {
@@ -1176,10 +1239,13 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, tog
   };
   const syncLabel = syncedAt ? syncedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" }) : "\u2014";
   const viewable = employees.filter((e) => !e.salaryOnly).slice().sort((a, b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", marginTop: "-6px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "tabs", style: { margin: 0 } }, /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "rollup" ? " active" : ""), onClick: () => setSub("rollup") }, "Roll-up"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "rates" ? " active" : ""), onClick: () => setSub("rates") }, "Employees & rates"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "entries" ? " active" : ""), onClick: () => setSub("entries") }, "All entries")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" } }, /* @__PURE__ */ React.createElement("span", { title: "Data is pulled live from the server on every load, on a 60s heartbeat, and whenever you return to the tab." }, "Synced ", syncLabel), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", title: "Refresh", "aria-label": "Refresh", style: { padding: "4px 10px", fontSize: 16, lineHeight: 1 }, onClick: doRefresh, disabled: refreshing }, "\u21BB")), onViewAs && /* @__PURE__ */ React.createElement("select", { value: "", onChange: (e) => {
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", marginTop: "-6px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "tabs", style: { margin: 0 } }, /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "rollup" ? " active" : ""), onClick: () => setSub("rollup") }, "Roll-up"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "rates" ? " active" : ""), onClick: () => setSub("rates") }, "Employees & rates"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "entries" ? " active" : ""), onClick: () => setSub("entries") }, "All entries"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "pto" ? " active" : ""), onClick: () => setSub("pto") }, "PTO", (() => {
+    const n = (allPto || []).filter((r) => r.status === "requested").length;
+    return n ? " (" + n + ")" : "";
+  })())), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" } }, /* @__PURE__ */ React.createElement("span", { title: "Data is pulled live from the server on every load, on a 60s heartbeat, and whenever you return to the tab." }, "Synced ", syncLabel), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", title: "Refresh", "aria-label": "Refresh", style: { padding: "4px 10px", fontSize: 16, lineHeight: 1 }, onClick: doRefresh, disabled: refreshing }, "\u21BB")), onViewAs && /* @__PURE__ */ React.createElement("select", { value: "", onChange: (e) => {
     const emp = viewable.find((x) => x.id === e.target.value);
     if (emp) onViewAs(emp);
-  }, style: { maxWidth: 240 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u{1F441} View as employee\u2026"), viewable.map((e) => /* @__PURE__ */ React.createElement("option", { key: e.id, value: e.id }, lastFirst(e.name)))))), sub === "rollup" && /* @__PURE__ */ React.createElement(Rollup, { employees, entries, salaries, adjustments, persistAdjustments, manualLocks, toggleLock, showToast }), sub === "rates" && /* @__PURE__ */ React.createElement(Rates, { employees, salaries, persistEmployees, persistSalaries, showToast }), sub === "entries" && /* @__PURE__ */ React.createElement(AllEntries, { employees, entries, deleteEntry, showToast }));
+  }, style: { maxWidth: 240 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u{1F441} View as employee\u2026"), viewable.map((e) => /* @__PURE__ */ React.createElement("option", { key: e.id, value: e.id }, lastFirst(e.name)))))), sub === "rollup" && /* @__PURE__ */ React.createElement(Rollup, { employees, entries, salaries, adjustments, persistAdjustments, manualLocks, toggleLock, showToast }), sub === "rates" && /* @__PURE__ */ React.createElement(Rates, { employees, salaries, persistEmployees, persistSalaries, showToast }), sub === "entries" && /* @__PURE__ */ React.createElement(AllEntries, { employees, entries, deleteEntry, showToast }), sub === "pto" && /* @__PURE__ */ React.createElement(PtoAdmin, { employees, allPto, onSetStatus: onSetPtoStatus, onAddPto, showToast }));
 }
 function payForEntry(emp, entry) {
   let total = 0;
