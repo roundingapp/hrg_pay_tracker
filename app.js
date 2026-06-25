@@ -895,6 +895,8 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const [ptoOpen, setPtoOpen] = useState(false);
   const ptoEnabled = !!onRequestPto;
   const approvedPto = (pto || []).filter((r) => r.status === "approved" && r.date >= todayISO()).sort((a, b) => a.date.localeCompare(b.date));
+  const requestedPto = (pto || []).filter((r) => r.status === "requested" && r.date >= todayISO()).sort((a, b) => a.date.localeCompare(b.date));
+  const ptoFmt = (list) => list.map((r) => fmtShort(r.date) + (r.half ? " \xBD" : "")).join(", ");
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
@@ -1031,7 +1033,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
         showToast && showToast("PTO request submitted");
       }
     }
-  ), /* @__PURE__ */ React.createElement("h2", null, "Log your work"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Logging as ", /* @__PURE__ */ React.createElement("strong", null, emp.name), " (@", normU(emp.username), "). Tap a day below to add or edit it."), ptoEnabled && /* @__PURE__ */ React.createElement("div", { className: "pto-banner" }, approvedPto.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "pto-approved-line" }, "\u2705 Approved PTO: ", approvedPto.map((r) => fmtShort(r.date) + (r.half ? " (\xBD)" : "")).join(", ")), /* @__PURE__ */ React.createElement("div", null, "To request PTO, ", /* @__PURE__ */ React.createElement("a", { className: "pto-link", onClick: () => setPtoOpen(true) }, "click here"), ".")), emp && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 22 } }), /* @__PURE__ */ React.createElement("div", { className: "period-nav" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
+  ), /* @__PURE__ */ React.createElement("h2", null, "Log your work"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Logging as ", /* @__PURE__ */ React.createElement("strong", null, emp.name), " (@", normU(emp.username), "). Tap a day below to add or edit it."), ptoEnabled && /* @__PURE__ */ React.createElement("div", { className: "pto-line" }, approvedPto.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "pto-status" }, "Approved PTO: ", ptoFmt(approvedPto)), requestedPto.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "pto-status pending" }, "Requested PTO: ", ptoFmt(requestedPto), " \xB7 pending"), /* @__PURE__ */ React.createElement("a", { className: "pto-link", onClick: () => setPtoOpen(true) }, "Request PTO")), emp && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 22 } }), /* @__PURE__ */ React.createElement("div", { className: "period-nav" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
     flushEntry();
     setPeriodIdx((i) => i - 1);
   }, "aria-label": "Previous pay period" }, "\u2039"), /* @__PURE__ */ React.createElement("div", { className: "pn-label" }, fmtShortYr(period.start), " \u2013 ", fmtShortYr(period.end)), /* @__PURE__ */ React.createElement("button", { onClick: () => {
