@@ -281,11 +281,10 @@
   // auto-detect long-polling: use it immediately on networks that block WebChannel streaming,
   // instead of waiting for the stream to time out and fall back (big stall on VPN/mobile/corp nets)
   window._db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
-  // bind reads to the *FromServer variants so every load is guaranteed live (never an in-session
-  // cache) — critical for payroll. Falls back to the normal read only if the server is unreachable.
-  const getDocLive = async (ref) => { try { return await getDocFromServer(ref); } catch (e) { return await getDoc(ref); } };
-  const getDocsLive = async (q) => { try { return await getDocsFromServer(q); } catch (e) { return await getDocs(q); } };
-  window._fs = { doc, getDoc: getDocLive, setDoc, collection, getDocs: getDocsLive, onSnapshot };
+  // Normal reads: with no offline persistence enabled, getDoc/getDocs are already server-fresh
+  // when online — and they establish the connection far faster on a cold/VPN load than the
+  // *FromServer variants, which could hang for minutes on a fresh cache (the 3-min view-as wait).
+  window._fs = { doc, getDoc, setDoc, collection, getDocs, onSnapshot };
   window._auth = getAuth(app);
   window._authfns = { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail, sendPasswordResetEmail };
   window._firebaseReady = true;
@@ -297,6 +296,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
 
-<script defer src="app.js?v=3d245d2a"></script>
+<script defer src="app.js?v=0a95aca1"></script>
 </body>
 </html>

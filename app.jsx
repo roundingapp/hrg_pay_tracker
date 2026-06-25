@@ -358,7 +358,7 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, sh
 }
 
 // PTO request calendar (modal): month view, weekdays only, tap a day to cycle full → ½ → off.
-function PtoCalendar({ pto, allowance, onSubmit, onClose }) {
+function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
   const todayStr = todayISO();
   const t0 = parseDate(todayStr);
   const [calY, setCalY] = useState(t0.getFullYear());
@@ -407,20 +407,24 @@ function PtoCalendar({ pto, allowance, onSubmit, onClose }) {
             const past = ds < todayStr;
             const ex = byDate[ds];
             const ss = sel[ds];
-            const locked = weekend || past || (ex && (ex.status==="approved" || ex.status==="requested"));
+            const hardLocked = weekend || past || (ex && ex.status === "approved");   // approved/weekend/past can't change
             let cls = "pto-cell";
             if (ex && ex.status==="approved") cls += " approved";
             else if (ex && ex.status==="requested") cls += " requested";
             else if (ss) cls += ss.half ? " sel half" : " sel";
             else if (weekend || past) cls += " muted";
             return (
-              <div key={ds} className={cls} onClick={()=>{ if(!locked) cycle(ds); }}>
+              <div key={ds} className={cls} onClick={()=>{
+                if (hardLocked) return;
+                if (ex && ex.status === "requested") { onCancel && onCancel(ds); return; }   // tap a yellow day to cancel
+                cycle(ds);
+              }}>
                 {dt.getDate()}{((ss && ss.half) || (ex && ex.half)) ? <span className="half-mark">½</span> : null}
               </div>
             );
           })}
         </div>
-        <div className="pto-legend"><span className="lg sel" /> requested&nbsp;&nbsp;<span className="lg approved" /> approved · tap to cycle full → ½ → off</div>
+        <div className="pto-legend"><span className="lg sel" /> requested&nbsp;&nbsp;<span className="lg approved" /> approved · tap: full → ½ → off · tap a yellow day to cancel</div>
         <div className="pto-actions">
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" disabled={selDays===0} onClick={()=>onSubmit(sel)}>Submit{selDays>0 ? " ("+selDays+"d)" : ""}</button>
@@ -604,6 +608,15 @@ function App() {
     setPto(merged);
     await savePto(uid, merged);
   }, [uid, myEmp]);
+  // cancel a still-pending (requested) PTO date by tapping it again
+  const cancelPto = useCallback(async (date) => {
+    if (!uid) return;
+    const latest = await loadPto(uid);
+    const next = latest.filter(r => !(r.date === date && r.status === "requested"));
+    if (next.length === latest.length) return;   // nothing to cancel (approved dates are protected)
+    setPto(next);
+    await savePto(uid, next);
+  }, [uid]);
 
   // owner "view as employee": find which entries doc their data lives in (their own uid, the manager's
   // doc for managed staff, or their empId as a fallback) and load their certs so the view matches theirs.
@@ -658,6 +671,15 @@ function App() {
     await savePto(docId, [...latest, ...fresh]);
     setAllPto(await loadAllPto());
   }, [impersonate, impersonateDoc]);
+  const cancelPtoForImpersonated = useCallback(async (date) => {
+    const docId = impersonateDoc;
+    if (!docId) return;
+    const latest = await loadPto(docId);
+    const next = latest.filter(r => !(r.date === date && r.status === "requested"));
+    if (next.length === latest.length) return;
+    await savePto(docId, next);
+    setAllPto(await loadAllPto());
+  }, [impersonate, impersonateDoc]);
 
   // owner deletes an entry from whichever NP doc it came from (tagged _uid on merge)
   const deleteOwnerEntry = useCallback(async (entry) => {
@@ -710,6 +732,7 @@ function App() {
                 empAdj={(() => { const o = {}; for (const [p, byEmp] of Object.entries(adjustments||{})) if (byEmp && byEmp[impersonate.id]) o[p] = byEmp[impersonate.id]; return o; })()}
                 pto={allPto.filter(r => r.empId === impersonate.id)} ptoAllowance={impersonate.ptoDays}
                 onRequestPto={ptoVisibleFor(impersonate.username) ? requestPtoForImpersonated : undefined}
+                onCancelPto={ptoVisibleFor(impersonate.username) ? cancelPtoForImpersonated : undefined}
                 showToast={showToast} />}
         </>
       )}
@@ -732,6 +755,7 @@ function App() {
               : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} baseSalary={mySalary} empAdj={myAdj}
                   pto={pto} ptoAllowance={myEmp && myEmp.ptoDays}
                   onRequestPto={ptoVisibleFor(myEmp && myEmp.username) ? requestPto : undefined}
+                  onCancelPto={ptoVisibleFor(myEmp && myEmp.username) ? cancelPto : undefined}
                   showToast={showToast} />
       )}
 
@@ -910,7 +934,7 @@ function OwnerLogin({ showToast }) {
 }
 
 /* ---------- entry view ---------- */
-function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, onRequestPto }) {
+function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, onRequestPto, onCancelPto }) {
   const [ptoOpen, setPtoOpen] = useState(false);
   const ptoEnabled = !!onRequestPto;   // only passed for the staff member's own screen, gated to test users
   const approvedPto = (pto || []).filter(r => r.status === "approved" && r.date >= todayISO())
@@ -1042,6 +1066,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     <div className="card">
       {ptoOpen && <PtoCalendar pto={pto} allowance={ptoAllowance}
         onClose={()=>setPtoOpen(false)}
+        onCancel={(date)=>{ onCancelPto && onCancelPto(date); showToast && showToast("PTO request canceled"); }}
         onSubmit={(sel)=>{ onRequestPto(sel); setPtoOpen(false); showToast && showToast("PTO request submitted"); }} />}
       <h2>Log your work</h2>
       <p className="hint">Logging as <strong>{emp.name}</strong> (@{normU(emp.username)}). Tap a day below to add or edit it.</p>

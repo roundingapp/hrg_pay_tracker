@@ -363,7 +363,7 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, sh
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("h2", { style: { marginTop: 0 } }, "Enter hours for staff"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Pick whose hours you're entering, then fill their days below. Switching keeps each person separate."), /* @__PURE__ */ React.createElement("div", { className: "manager-picker" }, managed.map((e) => /* @__PURE__ */ React.createElement("button", { key: e.id, className: "btn " + (sel && e.id === sel.id ? "btn-primary" : "btn-ghost"), onClick: () => setSelId(e.id) }, e.name)))), sel && /* @__PURE__ */ React.createElement(EntryView, { key: sel.id, emp: sel, entries, upsertEntry, certs: {}, certifyPeriod: () => {
   }, manualLocks, showToast }));
 }
-function PtoCalendar({ pto, allowance, onSubmit, onClose }) {
+function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
   const todayStr = todayISO();
   const t0 = parseDate(todayStr);
   const [calY, setCalY] = useState(t0.getFullYear());
@@ -410,16 +410,21 @@ function PtoCalendar({ pto, allowance, onSubmit, onClose }) {
     const past = ds < todayStr;
     const ex = byDate[ds];
     const ss = sel[ds];
-    const locked = weekend || past || ex && (ex.status === "approved" || ex.status === "requested");
+    const hardLocked = weekend || past || ex && ex.status === "approved";
     let cls = "pto-cell";
     if (ex && ex.status === "approved") cls += " approved";
     else if (ex && ex.status === "requested") cls += " requested";
     else if (ss) cls += ss.half ? " sel half" : " sel";
     else if (weekend || past) cls += " muted";
     return /* @__PURE__ */ React.createElement("div", { key: ds, className: cls, onClick: () => {
-      if (!locked) cycle(ds);
+      if (hardLocked) return;
+      if (ex && ex.status === "requested") {
+        onCancel && onCancel(ds);
+        return;
+      }
+      cycle(ds);
     } }, dt.getDate(), ss && ss.half || ex && ex.half ? /* @__PURE__ */ React.createElement("span", { className: "half-mark" }, "\xBD") : null);
-  })), /* @__PURE__ */ React.createElement("div", { className: "pto-legend" }, /* @__PURE__ */ React.createElement("span", { className: "lg sel" }), " requested\xA0\xA0", /* @__PURE__ */ React.createElement("span", { className: "lg approved" }), " approved \xB7 tap to cycle full \u2192 \xBD \u2192 off"), /* @__PURE__ */ React.createElement("div", { className: "pto-actions" }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: onClose }, "Cancel"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-primary", disabled: selDays === 0, onClick: () => onSubmit(sel) }, "Submit", selDays > 0 ? " (" + selDays + "d)" : ""))));
+  })), /* @__PURE__ */ React.createElement("div", { className: "pto-legend" }, /* @__PURE__ */ React.createElement("span", { className: "lg sel" }), " requested\xA0\xA0", /* @__PURE__ */ React.createElement("span", { className: "lg approved" }), " approved \xB7 tap: full \u2192 \xBD \u2192 off \xB7 tap a yellow day to cancel"), /* @__PURE__ */ React.createElement("div", { className: "pto-actions" }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: onClose }, "Cancel"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-primary", disabled: selDays === 0, onClick: () => onSubmit(sel) }, "Submit", selDays > 0 ? " (" + selDays + "d)" : ""))));
 }
 function App() {
   const [loaded, setLoaded] = useState(false);
@@ -592,6 +597,14 @@ function App() {
     setPto(merged);
     await savePto(uid, merged);
   }, [uid, myEmp]);
+  const cancelPto = useCallback(async (date) => {
+    if (!uid) return;
+    const latest = await loadPto(uid);
+    const next = latest.filter((r) => !(r.date === date && r.status === "requested"));
+    if (next.length === latest.length) return;
+    setPto(next);
+    await savePto(uid, next);
+  }, [uid]);
   const startImpersonate = useCallback(async (emp) => {
     if (!emp) return;
     let docId;
@@ -643,6 +656,15 @@ function App() {
     const fresh = Object.entries(sel || {}).filter(([date]) => !taken.has(date)).map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2, 6), empId: impersonate.id, date, half: !!(v && v.half), status: "requested", requestedAt: now, by: "admin" }));
     if (!fresh.length) return;
     await savePto(docId, [...latest, ...fresh]);
+    setAllPto(await loadAllPto());
+  }, [impersonate, impersonateDoc]);
+  const cancelPtoForImpersonated = useCallback(async (date) => {
+    const docId = impersonateDoc;
+    if (!docId) return;
+    const latest = await loadPto(docId);
+    const next = latest.filter((r) => !(r.date === date && r.status === "requested"));
+    if (next.length === latest.length) return;
+    await savePto(docId, next);
     setAllPto(await loadAllPto());
   }, [impersonate, impersonateDoc]);
   const deleteOwnerEntry = useCallback(async (entry) => {
@@ -699,6 +721,7 @@ function App() {
       pto: allPto.filter((r) => r.empId === impersonate.id),
       ptoAllowance: impersonate.ptoDays,
       onRequestPto: ptoVisibleFor(impersonate.username) ? requestPtoForImpersonated : void 0,
+      onCancelPto: ptoVisibleFor(impersonate.username) ? cancelPtoForImpersonated : void 0,
       showToast
     }
   )), isOwner && !impersonate && /* @__PURE__ */ React.createElement(
@@ -733,6 +756,7 @@ function App() {
       pto,
       ptoAllowance: myEmp && myEmp.ptoDays,
       onRequestPto: ptoVisibleFor(myEmp && myEmp.username) ? requestPto : void 0,
+      onCancelPto: ptoVisibleFor(myEmp && myEmp.username) ? cancelPto : void 0,
       showToast
     }
   )), /* @__PURE__ */ React.createElement("div", { className: "toast" + (toast ? " show" : "") }, toast));
@@ -899,7 +923,7 @@ function OwnerLogin({ showToast }) {
   };
   return /* @__PURE__ */ React.createElement("form", { onSubmit: submit }, /* @__PURE__ */ React.createElement("h2", null, "Admin sign in"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "For pay rates and the full roll-up. Your browser can save this."), /* @__PURE__ */ React.createElement("label", null, "Email"), /* @__PURE__ */ React.createElement("input", { type: "email", autoComplete: "username", value: email, onChange: (e) => setEmail(e.target.value), placeholder: "you@example.com", autoFocus: true }), /* @__PURE__ */ React.createElement("div", { style: { height: 12 } }), /* @__PURE__ */ React.createElement("label", null, "Password"), /* @__PURE__ */ React.createElement("input", { type: "password", autoComplete: "current-password", value: pw, onChange: (e) => setPw(e.target.value) }), err && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 8 } }, err), /* @__PURE__ */ React.createElement("div", { style: { height: 14 } }), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn btn-primary", style: { width: "100%" }, disabled: busy }, busy ? "Signing in\u2026" : "Sign in"));
 }
-function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, onRequestPto }) {
+function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, onRequestPto, onCancelPto }) {
   const [ptoOpen, setPtoOpen] = useState(false);
   const ptoEnabled = !!onRequestPto;
   const approvedPto = (pto || []).filter((r) => r.status === "approved" && r.date >= todayISO()).sort((a, b) => a.date.localeCompare(b.date));
@@ -1035,6 +1059,10 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
       pto,
       allowance: ptoAllowance,
       onClose: () => setPtoOpen(false),
+      onCancel: (date2) => {
+        onCancelPto && onCancelPto(date2);
+        showToast && showToast("PTO request canceled");
+      },
       onSubmit: (sel) => {
         onRequestPto(sel);
         setPtoOpen(false);
