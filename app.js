@@ -424,7 +424,7 @@ function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
       }
       cycle(ds);
     } }, dt.getDate(), ss && ss.half || ex && ex.half ? /* @__PURE__ */ React.createElement("span", { className: "half-mark" }, "\xBD") : null);
-  })), /* @__PURE__ */ React.createElement("div", { className: "pto-legend" }, /* @__PURE__ */ React.createElement("span", { className: "lg sel" }), " requested\xA0\xA0", /* @__PURE__ */ React.createElement("span", { className: "lg approved" }), " approved \xB7 tap: full \u2192 \xBD \u2192 off \xB7 tap a yellow day to cancel"), /* @__PURE__ */ React.createElement("div", { className: "pto-actions" }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: onClose }, "Cancel"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-primary", disabled: selDays === 0, onClick: () => onSubmit(sel) }, "Submit", selDays > 0 ? " (" + selDays + "d)" : ""))));
+  })), /* @__PURE__ */ React.createElement("div", { className: "pto-legend" }, /* @__PURE__ */ React.createElement("span", { className: "lg sel" }), " requested\xA0\xA0\xA0", /* @__PURE__ */ React.createElement("span", { className: "lg approved" }), " approved"), /* @__PURE__ */ React.createElement("div", { className: "pto-actions" }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: onClose }, "Cancel"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-primary", disabled: selDays === 0, onClick: () => onSubmit(sel) }, "Submit", selDays > 0 ? " (" + selDays + "d)" : ""))));
 }
 function App() {
   const [loaded, setLoaded] = useState(false);
