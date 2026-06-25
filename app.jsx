@@ -1617,6 +1617,11 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map(e => e.id===id ? {...e, annualSalary: val} : e));
     markDirty();
   };
+  const setPtoDays = (id, val) => {
+    if (val !== "" && !/^\d*\.?\d*$/.test(val)) return;   // allow half days (e.g. 12.5)
+    setDraft(draft.map(e => e.id===id ? {...e, ptoDays: val} : e));
+    markDirty();
+  };
   const setSalaryOnly = (id, val) => {
     setDraft(draft.map(e => e.id===id ? {...e, salaryOnly: val, isManager: val ? false : e.isManager, managedBy: "", fixedEligible: val ? false : e.fixedEligible} : e));
     markDirty();
@@ -1671,6 +1676,8 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       else delete out.salaryOnly;
       const cap = Number(e.patientCap);
       if (cap > 0 && !e.isManager && !e.salaryOnly) out.patientCap = Math.round(cap); else delete out.patientCap;
+      const pto = Number(e.ptoDays);
+      if (pto > 0) out.ptoDays = pto; else delete out.ptoDays;   // annual PTO allowance (supports half days)
       if (out.isManager) { delete out.managedBy; } else if (!e.salaryOnly) { if (e.managedBy) out.managedBy = String(e.managedBy); else delete out.managedBy; }
       return out;
     });
@@ -1788,7 +1795,14 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                       <div className="fixed-note" style={{marginTop:4}}>{money(Number(emp.annualSalary)/26)} biweekly</div>
                     )}
                   </div>
-                  {!emp.salaryOnly && !emp.isManager && (
+                  <div>
+                    <label>PTO days <span className="hint-sm">annual; blank = none (1099)</span></label>
+                    <input type="text" inputMode="decimal" value={emp.ptoDays ?? ""} placeholder="none"
+                      onChange={e=>setPtoDays(emp.id, e.target.value)} />
+                  </div>
+                </div>
+                {!emp.salaryOnly && !emp.isManager && (
+                  <div className="field-row">
                     <div>
                       <label>Patient cap <span className="hint-sm">salary-covered</span></label>
                       <input type="text" inputMode="numeric" value={emp.patientCap ?? ""} placeholder="none"
@@ -1797,8 +1811,8 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                         <div className="fixed-note" style={{marginTop:4}}>Certifies once/period; changing it re-prompts.</div>
                       )}
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
                 {!emp.salaryOnly && !emp.isManager && (
                   <>
                     <div className="rate-grid" style={{marginTop:12}}>
