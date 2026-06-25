@@ -669,7 +669,10 @@ function App() {
 
   const signOutNow = useCallback(async () => {
     try { await window._authfns.signOut(window._auth); } catch (e) {}
-    setTab("entry"); showToast("Signed out");
+    // hard, cache-busted reload so signing back in always lands on the latest deployed build
+    // (a unique query bypasses GitHub Pages' ~10-min HTML cache). Falls back to a plain reload.
+    try { window.location.replace(window.location.pathname + "?v=" + Date.now()); }
+    catch (e) { try { window.location.reload(); } catch (e2) { setTab("entry"); showToast("Signed out"); } }
   }, [showToast]);
 
   if (!loaded) return <div className="wrap"><div className="empty">Loading…</div></div>;
