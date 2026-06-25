@@ -29,6 +29,16 @@ const PTO_TEST_USERS = new Set(["nsutaria"]);
 const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username||"").trim().toLowerCase());
 // a person sees PTO only if the feature is on for them AND they actually have a PTO allowance (>0)
 const ptoEligible = (emp) => !!emp && ptoVisibleFor(emp.username) && Number(emp.ptoDays) > 0;
+// PTO resets each year on the employee's work anniversary (their start date). Returns the Date that
+// the CURRENT PTO year began (the most recent anniversary on or before today), or null if no start date.
+function ptoYearStartDate(startDate) {
+  if (!startDate) return null;
+  const s = parseDate(startDate); if (isNaN(s)) return null;
+  const t = parseDate(todayISO());
+  let y = t.getFullYear();
+  if (t < new Date(y, s.getMonth(), s.getDate())) y -= 1;   // anniversary not reached yet this year → last year's
+  return new Date(y, s.getMonth(), s.getDate());
+}
 // local-date YYYY-MM-DD for a Date object (calendar cells are local, not UTC)
 const localISO = (dt) => dt.getFullYear() + "-" + String(dt.getMonth()+1).padStart(2,"0") + "-" + String(dt.getDate()).padStart(2,"0");
 const ptoDayValue = (r) => (r && r.half ? 0.5 : 1);
@@ -360,7 +370,7 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, sh
 }
 
 // PTO request calendar (modal): month view, weekdays only, tap a day to cycle full → ½ → off.
-function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
+function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel }) {
   const todayStr = todayISO();
   const t0 = parseDate(todayStr);
   const [calY, setCalY] = useState(t0.getFullYear());
@@ -369,8 +379,12 @@ function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
 
   const byDate = {};
   for (const r of (pto||[])) byDate[r.date] = r;
-  const yr = String(t0.getFullYear());
-  const usedApproved = (pto||[]).filter(r => r.status === "approved" && String(r.date||"").slice(0,4) === yr)
+  // PTO year = the employee's anniversary year (resets on their start date); fall back to calendar year
+  const yStart = ptoYearStartDate(startDate);
+  const wStart = yStart ? localISO(yStart) : null;
+  const wEnd = yStart ? localISO(new Date(yStart.getFullYear()+1, yStart.getMonth(), yStart.getDate())) : null;
+  const inThisYear = (date) => wStart ? (date >= wStart && date < wEnd) : (String(date||"").slice(0,4) === String(t0.getFullYear()));
+  const usedApproved = (pto||[]).filter(r => r.status === "approved" && inThisYear(r.date))
     .reduce((s,r) => s + ptoDayValue(r), 0);
   const requestedDays = (pto||[]).filter(r => r.status === "requested").reduce((s,r) => s + ptoDayValue(r), 0);
   const selDays = Object.values(sel).reduce((s,v) => s + (v.half ? 0.5 : 1), 0);
@@ -465,7 +479,7 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
           {sortedEmps.map(e => <option key={e.id} value={e.id}>{lastFirst(e.name)}</option>)}
         </select>
       </div>
-      {addFor && <PtoCalendar pto={allPto.filter(r=>r.empId===addFor.id)} allowance={addFor.ptoDays}
+      {addFor && <PtoCalendar pto={allPto.filter(r=>r.empId===addFor.id)} allowance={addFor.ptoDays} startDate={addFor.startDate}
         onClose={()=>setAddFor(null)}
         onSubmit={(sel)=>{ onAddPto(addFor, sel); setAddFor(null); showToast && showToast("PTO added for " + addFor.name); }} />}
 
@@ -830,7 +844,7 @@ function App() {
                 certs={impersonateCerts} certifyPeriod={certifyForImpersonated} manualLocks={manualLocks}
                 audit={true} baseSalary={salaries[impersonate.id]}
                 empAdj={(() => { const o = {}; for (const [p, byEmp] of Object.entries(adjustments||{})) if (byEmp && byEmp[impersonate.id]) o[p] = byEmp[impersonate.id]; return o; })()}
-                pto={allPto.filter(r => r.empId === impersonate.id)} ptoAllowance={impersonate.ptoDays}
+                pto={allPto.filter(r => r.empId === impersonate.id)} ptoAllowance={impersonate.ptoDays} ptoStartDate={impersonate.startDate}
                 onRequestPto={ptoEligible(impersonate) ? requestPtoForImpersonated : undefined}
                 onCancelPto={ptoEligible(impersonate) ? cancelPtoForImpersonated : undefined}
                 showToast={showToast} />}
@@ -854,7 +868,7 @@ function App() {
             : myEmp.managedBy
               ? <div className="card"><div className="empty">Your hours are entered for you — there's nothing to log here. Reach out to the office if something looks off.</div></div>
               : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} baseSalary={mySalary} empAdj={myAdj}
-                  pto={pto} ptoAllowance={myEmp && myEmp.ptoDays}
+                  pto={pto} ptoAllowance={myEmp && myEmp.ptoDays} ptoStartDate={myEmp && myEmp.startDate}
                   onRequestPto={ptoEligible(myEmp) ? requestPto : undefined}
                   onCancelPto={ptoEligible(myEmp) ? cancelPto : undefined}
                   showToast={showToast} />
@@ -1035,7 +1049,7 @@ function OwnerLogin({ showToast }) {
 }
 
 /* ---------- entry view ---------- */
-function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, onRequestPto, onCancelPto }) {
+function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, ptoStartDate, onRequestPto, onCancelPto }) {
   const [ptoOpen, setPtoOpen] = useState(false);
   const ptoEnabled = !!onRequestPto;   // only passed for the staff member's own screen, gated to test users
   const approvedPto = (pto || []).filter(r => r.status === "approved" && r.date >= todayISO())
@@ -1165,7 +1179,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
 
   return (
     <div className="card">
-      {ptoOpen && <PtoCalendar pto={pto} allowance={ptoAllowance}
+      {ptoOpen && <PtoCalendar pto={pto} allowance={ptoAllowance} startDate={ptoStartDate}
         onClose={()=>setPtoOpen(false)}
         onCancel={(date)=>{ onCancelPto && onCancelPto(date); showToast && showToast("PTO request canceled"); }}
         onSubmit={(sel)=>{ onRequestPto(sel); setPtoOpen(false); showToast && showToast("PTO request submitted"); }} />}
@@ -1911,6 +1925,10 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map(e => e.id===id ? {...e, ptoDays: val} : e));
     markDirty();
   };
+  const setStartDate = (id, val) => {
+    setDraft(draft.map(e => e.id===id ? {...e, startDate: val} : e));   // YYYY-MM-DD; anniversary for PTO reset
+    markDirty();
+  };
   const setSalaryOnly = (id, val) => {
     setDraft(draft.map(e => e.id===id ? {...e, salaryOnly: val, isManager: val ? false : e.isManager, managedBy: "", fixedEligible: val ? false : e.fixedEligible} : e));
     markDirty();
@@ -1967,6 +1985,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       if (cap > 0 && !e.isManager && !e.salaryOnly) out.patientCap = Math.round(cap); else delete out.patientCap;
       const pto = Number(e.ptoDays);
       if (pto > 0) out.ptoDays = pto; else delete out.ptoDays;   // annual PTO allowance (supports half days)
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(e.startDate||""))) out.startDate = e.startDate; else delete out.startDate;   // PTO reset anniversary
       if (out.isManager) { delete out.managedBy; } else if (!e.salaryOnly) { if (e.managedBy) out.managedBy = String(e.managedBy); else delete out.managedBy; }
       return out;
     });
@@ -2090,8 +2109,12 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                       onChange={e=>setPtoDays(emp.id, e.target.value)} />
                   </div>
                 </div>
-                {!emp.salaryOnly && !emp.isManager && (
-                  <div className="field-row">
+                <div className="field-row">
+                  <div>
+                    <label>Start date <span className="hint-sm">PTO resets yearly on this date</span></label>
+                    <input type="date" value={emp.startDate || ""} onChange={e=>setStartDate(emp.id, e.target.value)} />
+                  </div>
+                  {!emp.salaryOnly && !emp.isManager && (
                     <div>
                       <label>Patient cap <span className="hint-sm">salary-covered</span></label>
                       <input type="text" inputMode="numeric" value={emp.patientCap ?? ""} placeholder="none"
@@ -2100,8 +2123,8 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                         <div className="fixed-note" style={{marginTop:4}}>Certifies once/period; changing it re-prompts.</div>
                       )}
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
                 {!emp.salaryOnly && !emp.isManager && (
                   <>
                     <div className="rate-grid" style={{marginTop:12}}>

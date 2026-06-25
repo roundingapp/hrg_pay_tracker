@@ -20,6 +20,15 @@ const PTO_ENABLED = false;
 const PTO_TEST_USERS = /* @__PURE__ */ new Set(["nsutaria"]);
 const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username || "").trim().toLowerCase());
 const ptoEligible = (emp) => !!emp && ptoVisibleFor(emp.username) && Number(emp.ptoDays) > 0;
+function ptoYearStartDate(startDate) {
+  if (!startDate) return null;
+  const s = parseDate(startDate);
+  if (isNaN(s)) return null;
+  const t = parseDate(todayISO());
+  let y = t.getFullYear();
+  if (t < new Date(y, s.getMonth(), s.getDate())) y -= 1;
+  return new Date(y, s.getMonth(), s.getDate());
+}
 const localISO = (dt) => dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0");
 const ptoDayValue = (r) => r && r.half ? 0.5 : 1;
 const isFixed = (key) => FIXED.some((f) => f.key === key);
@@ -364,7 +373,7 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, sh
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("h2", { style: { marginTop: 0 } }, "Enter hours for staff"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Pick whose hours you're entering, then fill their days below. Switching keeps each person separate."), /* @__PURE__ */ React.createElement("div", { className: "manager-picker" }, managed.map((e) => /* @__PURE__ */ React.createElement("button", { key: e.id, className: "btn " + (sel && e.id === sel.id ? "btn-primary" : "btn-ghost"), onClick: () => setSelId(e.id) }, e.name)))), sel && /* @__PURE__ */ React.createElement(EntryView, { key: sel.id, emp: sel, entries, upsertEntry, certs: {}, certifyPeriod: () => {
   }, manualLocks, showToast }));
 }
-function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
+function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel }) {
   const todayStr = todayISO();
   const t0 = parseDate(todayStr);
   const [calY, setCalY] = useState(t0.getFullYear());
@@ -372,8 +381,11 @@ function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
   const [sel, setSel] = useState({});
   const byDate = {};
   for (const r of pto || []) byDate[r.date] = r;
-  const yr = String(t0.getFullYear());
-  const usedApproved = (pto || []).filter((r) => r.status === "approved" && String(r.date || "").slice(0, 4) === yr).reduce((s, r) => s + ptoDayValue(r), 0);
+  const yStart = ptoYearStartDate(startDate);
+  const wStart = yStart ? localISO(yStart) : null;
+  const wEnd = yStart ? localISO(new Date(yStart.getFullYear() + 1, yStart.getMonth(), yStart.getDate())) : null;
+  const inThisYear = (date) => wStart ? date >= wStart && date < wEnd : String(date || "").slice(0, 4) === String(t0.getFullYear());
+  const usedApproved = (pto || []).filter((r) => r.status === "approved" && inThisYear(r.date)).reduce((s, r) => s + ptoDayValue(r), 0);
   const requestedDays = (pto || []).filter((r) => r.status === "requested").reduce((s, r) => s + ptoDayValue(r), 0);
   const selDays = Object.values(sel).reduce((s, v) => s + (v.half ? 0.5 : 1), 0);
   const allow = Number(allowance) || 0;
@@ -450,6 +462,7 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
     {
       pto: allPto.filter((r) => r.empId === addFor.id),
       allowance: addFor.ptoDays,
+      startDate: addFor.startDate,
       onClose: () => setAddFor(null),
       onSubmit: (sel) => {
         onAddPto(addFor, sel);
@@ -782,6 +795,7 @@ function App() {
       })(),
       pto: allPto.filter((r) => r.empId === impersonate.id),
       ptoAllowance: impersonate.ptoDays,
+      ptoStartDate: impersonate.startDate,
       onRequestPto: ptoEligible(impersonate) ? requestPtoForImpersonated : void 0,
       onCancelPto: ptoEligible(impersonate) ? cancelPtoForImpersonated : void 0,
       showToast
@@ -820,6 +834,7 @@ function App() {
       empAdj: myAdj,
       pto,
       ptoAllowance: myEmp && myEmp.ptoDays,
+      ptoStartDate: myEmp && myEmp.startDate,
       onRequestPto: ptoEligible(myEmp) ? requestPto : void 0,
       onCancelPto: ptoEligible(myEmp) ? cancelPto : void 0,
       showToast
@@ -988,7 +1003,7 @@ function OwnerLogin({ showToast }) {
   };
   return /* @__PURE__ */ React.createElement("form", { onSubmit: submit }, /* @__PURE__ */ React.createElement("h2", null, "Admin sign in"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "For pay rates and the full roll-up. Your browser can save this."), /* @__PURE__ */ React.createElement("label", null, "Email"), /* @__PURE__ */ React.createElement("input", { type: "email", autoComplete: "username", value: email, onChange: (e) => setEmail(e.target.value), placeholder: "you@example.com", autoFocus: true }), /* @__PURE__ */ React.createElement("div", { style: { height: 12 } }), /* @__PURE__ */ React.createElement("label", null, "Password"), /* @__PURE__ */ React.createElement("input", { type: "password", autoComplete: "current-password", value: pw, onChange: (e) => setPw(e.target.value) }), err && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 8 } }, err), /* @__PURE__ */ React.createElement("div", { style: { height: 14 } }), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn btn-primary", style: { width: "100%" }, disabled: busy }, busy ? "Signing in\u2026" : "Sign in"));
 }
-function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, onRequestPto, onCancelPto }) {
+function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, ptoStartDate, onRequestPto, onCancelPto }) {
   const [ptoOpen, setPtoOpen] = useState(false);
   const ptoEnabled = !!onRequestPto;
   const approvedPto = (pto || []).filter((r) => r.status === "approved" && r.date >= todayISO()).sort((a, b) => a.date.localeCompare(b.date));
@@ -1123,6 +1138,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     {
       pto,
       allowance: ptoAllowance,
+      startDate: ptoStartDate,
       onClose: () => setPtoOpen(false),
       onCancel: (date2) => {
         onCancelPto && onCancelPto(date2);
@@ -1678,6 +1694,10 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map((e) => e.id === id ? { ...e, ptoDays: val } : e));
     markDirty();
   };
+  const setStartDate = (id, val) => {
+    setDraft(draft.map((e) => e.id === id ? { ...e, startDate: val } : e));
+    markDirty();
+  };
   const setSalaryOnly = (id, val) => {
     setDraft(draft.map((e) => e.id === id ? { ...e, salaryOnly: val, isManager: val ? false : e.isManager, managedBy: "", fixedEligible: val ? false : e.fixedEligible } : e));
     markDirty();
@@ -1758,6 +1778,8 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       const pto = Number(e.ptoDays);
       if (pto > 0) out.ptoDays = pto;
       else delete out.ptoDays;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(e.startDate || ""))) out.startDate = e.startDate;
+      else delete out.startDate;
       if (out.isManager) {
         delete out.managedBy;
       } else if (!e.salaryOnly) {
@@ -1852,7 +1874,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
         placeholder: "none",
         onChange: (e) => setPtoDays(emp.id, e.target.value)
       }
-    ))), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Patient cap ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "salary-covered")), /* @__PURE__ */ React.createElement(
+    ))), /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Start date ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "PTO resets yearly on this date")), /* @__PURE__ */ React.createElement("input", { type: "date", value: emp.startDate || "", onChange: (e) => setStartDate(emp.id, e.target.value) })), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Patient cap ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "salary-covered")), /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "text",
