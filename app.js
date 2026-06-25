@@ -634,6 +634,17 @@ function App() {
     setImpersonateCerts((c) => ({ ...c, [String(periodIdx)]: { cap, at } }));
     await saveCertForUid(docId, periodIdx, cap, at);
   }, [impersonate, impersonateDoc]);
+  const requestPtoForImpersonated = useCallback(async (sel) => {
+    const docId = impersonateDoc;
+    if (!docId || !impersonate) return;
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const latest = await loadPto(docId);
+    const taken = new Set(latest.map((r) => r.date));
+    const fresh = Object.entries(sel || {}).filter(([date]) => !taken.has(date)).map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2, 6), empId: impersonate.id, date, half: !!(v && v.half), status: "requested", requestedAt: now, by: "admin" }));
+    if (!fresh.length) return;
+    await savePto(docId, [...latest, ...fresh]);
+    setAllPto(await loadAllPto());
+  }, [impersonate, impersonateDoc]);
   const deleteOwnerEntry = useCallback(async (entry) => {
     if (!entry || !entry._uid) return;
     const latest = await loadEntriesForUid(entry._uid);
@@ -677,6 +688,9 @@ function App() {
         for (const [p, byEmp] of Object.entries(adjustments || {})) if (byEmp && byEmp[impersonate.id]) o[p] = byEmp[impersonate.id];
         return o;
       })(),
+      pto: allPto.filter((r) => r.empId === impersonate.id),
+      ptoAllowance: impersonate.ptoDays,
+      onRequestPto: ptoVisibleFor(impersonate.username) ? requestPtoForImpersonated : void 0,
       showToast
     }
   )), isOwner && !impersonate && /* @__PURE__ */ React.createElement(
