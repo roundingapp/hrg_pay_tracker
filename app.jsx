@@ -424,7 +424,7 @@ function PtoCalendar({ pto, allowance, onSubmit, onClose, onCancel }) {
             );
           })}
         </div>
-        <div className="pto-legend"><span className="lg sel" /> requested&nbsp;&nbsp;<span className="lg approved" /> approved · tap: full → ½ → off · tap a yellow day to cancel</div>
+        <div className="pto-legend"><span className="lg sel" /> requested&nbsp;&nbsp;&nbsp;<span className="lg approved" /> approved</div>
         <div className="pto-actions">
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" disabled={selDays===0} onClick={()=>onSubmit(sel)}>Submit{selDays>0 ? " ("+selDays+"d)" : ""}</button>
