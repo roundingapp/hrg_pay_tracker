@@ -1411,7 +1411,7 @@ function payForEntry(emp, entry) {
 }
 
 function Rollup({ employees, entries, salaries, adjustments, persistAdjustments, manualLocks, toggleLock, showToast }) {
-  const periods = periodList(10, 2);                 // selectable window
+  const periods = periodList(10, 0);                 // selectable window — no future periods (until their first day)
   const [mode, setMode] = useState("period");        // "period" | "day" | "custom"
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
   const [from, setFrom] = useState("");
