@@ -1277,7 +1277,7 @@ function payForEntry(emp, entry) {
   return total;
 }
 function Rollup({ employees, entries, salaries, adjustments, persistAdjustments, manualLocks, toggleLock, showToast }) {
-  const periods = periodList(10, 2);
+  const periods = periodList(10, 0);
   const [mode, setMode] = useState("period");
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
   const [from, setFrom] = useState("");
