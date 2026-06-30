@@ -111,12 +111,13 @@ function periodByIndex(i) {
 function isPeriodLocked(p, now = /* @__PURE__ */ new Date()) {
   return now >= p.lockAt;
 }
-function isPeriodLockedCombined(periodIndex, manualLocks, now = /* @__PURE__ */ new Date()) {
+function isPeriodLockedCombined(periodIndex, manualLocks, manualUnlocks = [], now = /* @__PURE__ */ new Date()) {
+  if (Array.isArray(manualUnlocks) && manualUnlocks.includes(periodIndex)) return false;
   if (Array.isArray(manualLocks) && manualLocks.includes(periodIndex)) return true;
   return isPeriodLocked(periodByIndex(periodIndex), now);
 }
-function dateInLockedPeriod(iso, manualLocks, now = /* @__PURE__ */ new Date()) {
-  return isPeriodLockedCombined(periodIndexFor(iso), manualLocks, now);
+function dateInLockedPeriod(iso, manualLocks, manualUnlocks = [], now = /* @__PURE__ */ new Date()) {
+  return isPeriodLockedCombined(periodIndexFor(iso), manualLocks, manualUnlocks, now);
 }
 function currentPeriodIndex() {
   return periodIndexFor(todayISO());
@@ -363,7 +364,7 @@ async function loadPublicRoster() {
     return { usernames: null, dir: {}, managed: [] };
   }
 }
-function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, showToast }) {
+function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, manualUnlocks, showToast }) {
   const managed = employees.filter((e) => e.managedBy === manager.id);
   const [selId, setSelId] = useState(() => managed[0] ? managed[0].id : null);
   const sel = managed.find((e) => e.id === selId) || managed[0] || null;
@@ -371,7 +372,7 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, sh
     return /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, `No staff are assigned to you yet. Ask the owner to set someone's "Entered by" to your name in Employees & rates.`));
   }
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("h2", { style: { marginTop: 0 } }, "Enter hours for staff"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Pick whose hours you're entering, then fill their days below. Switching keeps each person separate."), /* @__PURE__ */ React.createElement("div", { className: "manager-picker" }, managed.map((e) => /* @__PURE__ */ React.createElement("button", { key: e.id, className: "btn " + (sel && e.id === sel.id ? "btn-primary" : "btn-ghost"), onClick: () => setSelId(e.id) }, e.name)))), sel && /* @__PURE__ */ React.createElement(EntryView, { key: sel.id, emp: sel, entries, upsertEntry, certs: {}, certifyPeriod: () => {
-  }, manualLocks, showToast }));
+  }, manualLocks, manualUnlocks, showToast }));
 }
 function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel }) {
   const todayStr = todayISO();
@@ -497,6 +498,7 @@ function App() {
   const [impersonateDoc, setImpersonateDoc] = useState(null);
   const [impersonateCerts, setImpersonateCerts] = useState({});
   const [manualLocks, setManualLocks] = useState([]);
+  const [manualUnlocks, setManualUnlocks] = useState([]);
   const [toast, setToast] = useState("");
   const isOwner = isOwnerUser(authUser);
   const uid = authUser ? authUser.uid : null;
@@ -514,12 +516,14 @@ function App() {
       setEmployees([]);
       setEntries([]);
       setManualLocks([]);
+      setManualUnlocks([]);
       return;
     }
     const owner = isOwnerUser(u);
-    const [emps, locks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2, myPto, everyPto] = await Promise.all([
+    const [emps, locks, unlocks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2, myPto, everyPto] = await Promise.all([
       sGet("employees", null),
       sGet("manualLocks", []),
+      sGet("manualUnlocks", []),
       owner ? loadAllEntries() : loadEntriesForUid(u.uid),
       owner ? Promise.resolve({}) : loadCertsForUid(u.uid),
       owner ? loadSalaries() : Promise.resolve({}),
@@ -533,6 +537,7 @@ function App() {
     ]);
     setEmployees(emps && emps.length ? emps : []);
     setManualLocks(Array.isArray(locks) ? locks : []);
+    setManualUnlocks(Array.isArray(unlocks) ? unlocks : []);
     setEntries(entries2);
     setCerts(certs2);
     setSalaries(salaries2);
@@ -633,14 +638,21 @@ function App() {
     await savePto(docId, [...latest, ...fresh]);
     setAllPto(await loadAllPto());
   }, [allPto, entries]);
-  const toggleLock = useCallback(async (periodIndex) => {
-    const latest = await sGet("manualLocks", []);
-    const set = new Set(Array.isArray(latest) ? latest : []);
-    if (set.has(periodIndex)) set.delete(periodIndex);
-    else set.add(periodIndex);
-    const next = [...set];
-    setManualLocks(next);
-    await sSet("manualLocks", next);
+  const setPeriodLock = useCallback(async (periodIndex, shouldLock) => {
+    const curLocks = new Set(await sGet("manualLocks", []) || []);
+    const curUnlocks = new Set(await sGet("manualUnlocks", []) || []);
+    if (shouldLock) {
+      curLocks.add(periodIndex);
+      curUnlocks.delete(periodIndex);
+    } else {
+      curUnlocks.add(periodIndex);
+      curLocks.delete(periodIndex);
+    }
+    const nextLocks = [...curLocks], nextUnlocks = [...curUnlocks];
+    setManualLocks(nextLocks);
+    setManualUnlocks(nextUnlocks);
+    await sSet("manualLocks", nextLocks);
+    await sSet("manualUnlocks", nextUnlocks);
   }, []);
   const upsertEntry = useCallback(async (entry) => {
     if (!uid) return false;
@@ -774,6 +786,7 @@ function App() {
       entries,
       upsertEntry: upsertForImpersonated,
       manualLocks,
+      manualUnlocks,
       showToast
     }
   ) : /* @__PURE__ */ React.createElement(
@@ -786,6 +799,7 @@ function App() {
       certs: impersonateCerts,
       certifyPeriod: certifyForImpersonated,
       manualLocks,
+      manualUnlocks,
       audit: true,
       baseSalary: salaries[impersonate.id],
       empAdj: (() => {
@@ -808,7 +822,8 @@ function App() {
       salaries,
       adjustments,
       manualLocks,
-      toggleLock,
+      manualUnlocks,
+      setPeriodLock,
       persistEmployees,
       persistSalaries,
       persistAdjustments,
@@ -821,7 +836,7 @@ function App() {
       onRefresh: refresh,
       showToast
     }
-  ), authUser && !isOwner && (!myEmp ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees & rates, then sign out and back in.")) : myEmp.isManager ? /* @__PURE__ */ React.createElement(ManagerView, { manager: myEmp, employees, entries, upsertEntry, manualLocks, showToast }) : myEmp.managedBy ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "Your hours are entered for you \u2014 there's nothing to log here. Reach out to the office if something looks off.")) : /* @__PURE__ */ React.createElement(
+  ), authUser && !isOwner && (!myEmp ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees & rates, then sign out and back in.")) : myEmp.isManager ? /* @__PURE__ */ React.createElement(ManagerView, { manager: myEmp, employees, entries, upsertEntry, manualLocks, manualUnlocks, showToast }) : myEmp.managedBy ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "Your hours are entered for you \u2014 there's nothing to log here. Reach out to the office if something looks off.")) : /* @__PURE__ */ React.createElement(
     EntryView,
     {
       emp: myEmp,
@@ -830,6 +845,7 @@ function App() {
       certs,
       certifyPeriod,
       manualLocks,
+      manualUnlocks,
       baseSalary: mySalary,
       empAdj: myAdj,
       pto,
@@ -1003,7 +1019,7 @@ function OwnerLogin({ showToast }) {
   };
   return /* @__PURE__ */ React.createElement("form", { onSubmit: submit }, /* @__PURE__ */ React.createElement("h2", null, "Admin sign in"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "For pay rates and the full roll-up. Your browser can save this."), /* @__PURE__ */ React.createElement("label", null, "Email"), /* @__PURE__ */ React.createElement("input", { type: "email", autoComplete: "username", value: email, onChange: (e) => setEmail(e.target.value), placeholder: "you@example.com", autoFocus: true }), /* @__PURE__ */ React.createElement("div", { style: { height: 12 } }), /* @__PURE__ */ React.createElement("label", null, "Password"), /* @__PURE__ */ React.createElement("input", { type: "password", autoComplete: "current-password", value: pw, onChange: (e) => setPw(e.target.value) }), err && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 8 } }, err), /* @__PURE__ */ React.createElement("div", { style: { height: 14 } }), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn btn-primary", style: { width: "100%" }, disabled: busy }, busy ? "Signing in\u2026" : "Sign in"));
 }
-function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, ptoStartDate, onRequestPto, onCancelPto }) {
+function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, manualUnlocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, ptoStartDate, onRequestPto, onCancelPto }) {
   const [ptoOpen, setPtoOpen] = useState(false);
   const ptoEnabled = !!onRequestPto;
   const approvedPto = (pto || []).filter((r) => r.status === "approved" && r.date >= todayISO()).sort((a, b) => a.date.localeCompare(b.date));
@@ -1011,6 +1027,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const ptoFmt = (list) => list.map((r) => fmtShort(r.date) + (r.half ? " \xBD" : "")).join(", ");
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
+  const [shift, setShift] = useState("regular");
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
   const [otherOn, setOtherOn] = useState(false);
   const [otherAmt, setOtherAmt] = useState("");
@@ -1026,7 +1043,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     entryDirtyRef.current = false;
     setEntryDirty(false);
   };
-  const dateLocked = date ? dateInLockedPeriod(date, manualLocks) : false;
+  const dateLocked = date ? dateInLockedPeriod(date, manualLocks, manualUnlocks) : false;
   const maxPeriodIdx = currentPeriodIndex();
   const period = periodByIndex(periodIdx);
   const periodDays = Array.from({ length: PERIOD_LEN_DAYS }, (_, i) => fmtISO(addDays(parseDate(period.start), i)));
@@ -1038,7 +1055,8 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const capped = cap > 0;
   const cert = certs && certs[String(periodIdx)];
   const certifiedForPeriod = !capped || cert && Number(cert.cap) === cap;
-  const gateOpen = certifiedForPeriod || !!audit;
+  const onExtraShift = capped && shift === "extra";
+  const gateOpen = certifiedForPeriod || onExtraShift || !!audit;
   const baseBiweekly = Number(baseSalary) > 0 ? Number(baseSalary) / 26 : 0;
   const periodAdj = empAdj && empAdj[String(periodIdx)] || {};
   const periodBonus = Number(periodAdj.bonus) || 0;
@@ -1055,6 +1073,8 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
       merged[k] = (merged[k] || 0) + Number(v || 0);
     }));
     setCounts(merged);
+    const withShift = es.find((e) => e.shift);
+    setShift(withShift && withShift.shift === "extra" ? "extra" : "regular");
     const withOther = es.find((e) => e.other && Number(e.other.amount) > 0);
     if (withOther) {
       setOtherOn(true);
@@ -1107,6 +1127,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     const id = existing[0] && existing[0].id || "e_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
     const entry = { id, empId: emp.id, username: normU(emp.username), date, counts: cleanCounts };
     if (other) entry.other = other;
+    if (capped) entry.shift = shift;
     return { entry };
   };
   const saveEntry = async () => {
@@ -1158,7 +1179,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     setPeriodIdx((i) => Math.min(maxPeriodIdx, i + 1));
   }, disabled: periodIdx >= maxPeriodIdx, "aria-label": "Next pay period" }, "\u203A")), /* @__PURE__ */ React.createElement("div", { className: "period-total" }, baseBiweekly > 0 || periodBonus > 0 || periodReimb > 0 ? /* @__PURE__ */ React.createElement("div", { className: "pay-breakdown" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Base"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(baseBiweekly))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Variable"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(periodDollars))), periodBonus > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Bonus"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(periodBonus))), periodReimb > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Reimbursement"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(periodReimb))), /* @__PURE__ */ React.createElement("div", { className: "pay-total" }, /* @__PURE__ */ React.createElement("span", null, "Total"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(baseBiweekly + periodDollars + periodBonus + periodReimb)))) : /* @__PURE__ */ React.createElement("span", null, "This period:", /* @__PURE__ */ React.createElement("span", { className: "pay", style: { marginLeft: 6 } }, money(periodDollars))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--muted)", marginTop: 4 } }, "Payday ", period.paydayLabel))), /* @__PURE__ */ React.createElement("div", { style: { height: 12 } }), /* @__PURE__ */ React.createElement("div", { className: "week-grid" }, DOW.map((d) => /* @__PURE__ */ React.createElement("div", { className: "dow", key: "dow-" + d }, d)), periodDays.map((iso) => {
     const logged = dayEntries(iso).length > 0;
-    const locked = dateInLockedPeriod(iso, manualLocks);
+    const locked = dateInLockedPeriod(iso, manualLocks, manualUnlocks);
     const future = iso > todayISO();
     const cls = "day-cell" + (iso === date ? " selected" : "") + (logged ? " logged" : "") + (iso === todayISO() ? " today" : "") + (locked ? " locked" : "") + (future ? " future" : "");
     return /* @__PURE__ */ React.createElement(
@@ -1176,7 +1197,17 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
       /* @__PURE__ */ React.createElement("div", { className: "dnum" }, parseDate(iso).getDate(), locked ? " \u{1F512}" : ""),
       logged ? /* @__PURE__ */ React.createElement("div", { className: "damt" }, money(dayDollars(iso))) : /* @__PURE__ */ React.createElement("div", { className: "dempty" }, "\u2014")
     );
-  })), dateLocked && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--amber)", marginTop: 12 } }, "Heads up: ", fmtShortYr(date), " is in a pay period that's already locked for payroll. You can still save, but the owner will be notified it came in late.")), emp && capped && !certifiedForPeriod && !audit && /* @__PURE__ */ React.createElement("div", { className: "cap-gate" }, /* @__PURE__ */ React.createElement("div", { className: "cap-gate-title" }, "\u26A0 Salary cap"), /* @__PURE__ */ React.createElement("div", { className: "cap-gate-body" }, "Your salary covers your first ", /* @__PURE__ */ React.createElement("strong", null, cap), " patients this pay period (", periodLabel, "). Only log ", /* @__PURE__ */ React.createElement("strong", null, "additional"), " consults / follow-ups here."), /* @__PURE__ */ React.createElement("label", { className: "cap-gate-check" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: false, onChange: () => certifyPeriod(periodIdx, cap) }), /* @__PURE__ */ React.createElement("span", null, "I certify I've met my ", cap, "-patient cap this period and these are additional patients."))), emp && capped && !certifiedForPeriod && audit && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 14, color: "var(--amber)" } }, "\u26A0 Hasn't certified the ", cap, "-patient cap this period \u2014 you're editing as owner (audit)."), emp && capped && certifiedForPeriod && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 14, color: "var(--accent-ink)" } }, "\u2713 Certified for ", periodLabel, " \u2014 logging additional patients."), emp && gateOpen && visibleTypes.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 18 } }), /* @__PURE__ */ React.createElement("label", { style: { marginBottom: 10 } }, "Counts for ", fmtShortYr(date), dayEntries(date).length ? " \u2014 editing your saved day" : ""), /* @__PURE__ */ React.createElement("div", { className: "counter-grid" }, visibleTypes.map((t) => {
+  })), dateLocked && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--amber)", marginTop: 12 } }, "Heads up: ", fmtShortYr(date), " is in a pay period that's already locked for payroll. You can still save, but the owner will be notified it came in late.")), emp && capped && !dateLocked && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 14 } }, /* @__PURE__ */ React.createElement("label", { style: { marginBottom: 6 } }, "Shift type for ", fmtShort(date)), /* @__PURE__ */ React.createElement("div", { className: "tabs", style: { marginBottom: 0 } }, /* @__PURE__ */ React.createElement("button", { className: "tab" + (shift === "regular" ? " active" : ""), onClick: () => {
+    if (shift !== "regular") {
+      setShift("regular");
+      markEntryDirty();
+    }
+  } }, "Regular shift"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (shift === "extra" ? " active" : ""), onClick: () => {
+    if (shift !== "extra") {
+      setShift("extra");
+      markEntryDirty();
+    }
+  } }, "Extra shift")), onExtraShift && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 8, color: "var(--accent-ink)" } }, "Extra shift \u2014 not covered by your salary cap. Log ", /* @__PURE__ */ React.createElement("strong", null, "every"), " patient you saw; no certification needed.")), emp && capped && shift === "regular" && !certifiedForPeriod && !audit && /* @__PURE__ */ React.createElement("div", { className: "cap-gate" }, /* @__PURE__ */ React.createElement("div", { className: "cap-gate-title" }, "\u26A0 Salary cap"), /* @__PURE__ */ React.createElement("div", { className: "cap-gate-body" }, "Your salary covers your first ", /* @__PURE__ */ React.createElement("strong", null, cap), " patients this pay period (", periodLabel, "). Only log ", /* @__PURE__ */ React.createElement("strong", null, "additional"), " consults / follow-ups here."), /* @__PURE__ */ React.createElement("label", { className: "cap-gate-check" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: false, onChange: () => certifyPeriod(periodIdx, cap) }), /* @__PURE__ */ React.createElement("span", null, "I certify I've met my ", cap, "-patient cap this period and these are additional patients."))), emp && capped && shift === "regular" && !certifiedForPeriod && audit && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 14, color: "var(--amber)" } }, "\u26A0 Hasn't certified the ", cap, "-patient cap this period \u2014 you're editing as owner (audit)."), emp && capped && shift === "regular" && certifiedForPeriod && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 14, color: "var(--accent-ink)" } }, "\u2713 Certified for ", periodLabel, " \u2014 logging additional patients."), emp && gateOpen && visibleTypes.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 18 } }), /* @__PURE__ */ React.createElement("label", { style: { marginBottom: 10 } }, "Counts for ", fmtShortYr(date), dayEntries(date).length ? " \u2014 editing your saved day" : ""), /* @__PURE__ */ React.createElement("div", { className: "counter-grid" }, visibleTypes.map((t) => {
     const rate = isFixed(t.key) ? t.rate : Number(emp.rates?.[t.key] || 0);
     const dec = isDecimal(t.key);
     return /* @__PURE__ */ React.createElement("div", { className: "counter", key: t.key }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "clabel" }, t.label), /* @__PURE__ */ React.createElement("div", { className: "crate" }, money(rate), " / ", t.unit, QTY_MAX[t.key] != null ? " \xB7 max " + QTY_MAX[t.key] : "")), /* @__PURE__ */ React.createElement("div", { className: "stepper" }, /* @__PURE__ */ React.createElement("button", { onClick: () => bump(t.key, -1) }, "\u2212"), /* @__PURE__ */ React.createElement(
@@ -1243,7 +1274,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     markEntryDirty();
   } }, "Clear"))));
 }
-function OwnerView({ employees, entries, salaries, adjustments, manualLocks, toggleLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, allPto, onSetPtoStatus, onAddPto, onViewAs, syncedAt, onRefresh, showToast }) {
+function OwnerView({ employees, entries, salaries, adjustments, manualLocks, manualUnlocks, setPeriodLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, allPto, onSetPtoStatus, onAddPto, onViewAs, syncedAt, onRefresh, showToast }) {
   const [sub, setSub] = useState("rollup");
   const [refreshing, setRefreshing] = useState(false);
   const doRefresh = async () => {
@@ -1262,7 +1293,7 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, tog
   })())), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" } }, /* @__PURE__ */ React.createElement("span", { title: "Data is pulled live from the server on every load, on a 60s heartbeat, and whenever you return to the tab." }, "Synced ", syncLabel), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", title: "Refresh", "aria-label": "Refresh", style: { padding: "4px 10px", fontSize: 16, lineHeight: 1 }, onClick: doRefresh, disabled: refreshing }, "\u21BB")), onViewAs && /* @__PURE__ */ React.createElement("select", { value: "", onChange: (e) => {
     const emp = viewable.find((x) => x.id === e.target.value);
     if (emp) onViewAs(emp);
-  }, style: { maxWidth: 240 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u{1F441} View as employee\u2026"), viewable.map((e) => /* @__PURE__ */ React.createElement("option", { key: e.id, value: e.id }, lastFirst(e.name)))))), sub === "rollup" && /* @__PURE__ */ React.createElement(Rollup, { employees, entries, salaries, adjustments, persistAdjustments, manualLocks, toggleLock, showToast }), sub === "rates" && /* @__PURE__ */ React.createElement(Rates, { employees, salaries, persistEmployees, persistSalaries, showToast }), sub === "entries" && /* @__PURE__ */ React.createElement(AllEntries, { employees, entries, deleteEntry, showToast }), sub === "pto" && /* @__PURE__ */ React.createElement(PtoAdmin, { employees, allPto, onSetStatus: onSetPtoStatus, onAddPto, showToast }));
+  }, style: { maxWidth: 240 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u{1F441} View as employee\u2026"), viewable.map((e) => /* @__PURE__ */ React.createElement("option", { key: e.id, value: e.id }, lastFirst(e.name)))))), sub === "rollup" && /* @__PURE__ */ React.createElement(Rollup, { employees, entries, salaries, adjustments, persistAdjustments, manualLocks, manualUnlocks, setPeriodLock, showToast }), sub === "rates" && /* @__PURE__ */ React.createElement(Rates, { employees, salaries, persistEmployees, persistSalaries, showToast }), sub === "entries" && /* @__PURE__ */ React.createElement(AllEntries, { employees, entries, deleteEntry, showToast }), sub === "pto" && /* @__PURE__ */ React.createElement(PtoAdmin, { employees, allPto, onSetStatus: onSetPtoStatus, onAddPto, showToast }));
 }
 function payForEntry(emp, entry) {
   let total = 0;
@@ -1276,7 +1307,7 @@ function payForEntry(emp, entry) {
   if (ov > 0) total += ov;
   return total;
 }
-function Rollup({ employees, entries, salaries, adjustments, persistAdjustments, manualLocks, toggleLock, showToast }) {
+function Rollup({ employees, entries, salaries, adjustments, persistAdjustments, manualLocks, manualUnlocks, setPeriodLock, showToast }) {
   const periods = periodList(10, 0);
   const [mode, setMode] = useState("period");
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
@@ -1314,7 +1345,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
   const [calY, setCalY] = useState(parseDate(todayISO()).getFullYear());
   const [calM, setCalM] = useState(parseDate(todayISO()).getMonth());
   const selPeriod = periodByIndex(periodIdx);
-  const locked = isPeriodLockedCombined(periodIdx, manualLocks);
+  const locked = isPeriodLockedCombined(periodIdx, manualLocks, manualUnlocks);
   const [adjDraft, setAdjDraft] = useState(adjustments || {});
   const adjDirty = useRef(false);
   useEffect(() => {
@@ -1538,6 +1569,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
   };
   const autoLocked = isPeriodLocked(selPeriod);
   const manualLocked = Array.isArray(manualLocks) && manualLocks.includes(periodIdx);
+  const forceUnlocked = Array.isArray(manualUnlocks) && manualUnlocks.includes(periodIdx);
   return /* @__PURE__ */ React.createElement("div", { className: "card" }, pendingCell && /* @__PURE__ */ React.createElement("div", { className: "modal-backdrop", onClick: () => {
     setPendingCell(null);
     setOverrideOk(false);
@@ -1555,18 +1587,18 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
       } catch (ex) {
       }
     }, 0);
-  } }, "Continue")))), /* @__PURE__ */ React.createElement("h2", null, "Roll-up"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Review by pay period, a single day, or a custom range. Pay periods run Sunday\u2013Saturday (14 days), paid the Friday after close."), /* @__PURE__ */ React.createElement("div", { className: "tabs", style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "period" ? " active" : ""), onClick: () => setMode("period") }, "Pay period"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "day" ? " active" : ""), onClick: () => setMode("day") }, "Day"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "custom" ? " active" : ""), onClick: () => setMode("custom") }, "Custom range")), mode === "period" && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("label", null, "Pay period"), /* @__PURE__ */ React.createElement("select", { value: periodIdx, onChange: (e) => setPeriodIdx(Number(e.target.value)) }, periods.map((p) => /* @__PURE__ */ React.createElement("option", { key: p.index, value: p.index }, fmtShortYr(p.start), " \u2013 ", fmtShortYr(p.end), "  \xB7  paid ", fmtShortYr(p.payday), p.index === currentPeriodIndex() ? "  (current)" : ""))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: "var(--muted)" } }, "Payday ", /* @__PURE__ */ React.createElement("strong", null, fmtShortYr(selPeriod.payday))), locked ? /* @__PURE__ */ React.createElement("span", { className: "pill", style: { background: "var(--danger-soft)", color: "var(--danger)" } }, "\u{1F512} Locked", manualLocked ? " (manual)" : autoLocked ? " (72h pre-payday)" : "") : /* @__PURE__ */ React.createElement("span", { className: "pill", style: { background: "var(--accent-soft)", color: "var(--accent-ink)" } }, "Open"), /* @__PURE__ */ React.createElement(
+  } }, "Continue")))), /* @__PURE__ */ React.createElement("h2", null, "Roll-up"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Review by pay period, a single day, or a custom range. Pay periods run Sunday\u2013Saturday (14 days), paid the Friday after close."), /* @__PURE__ */ React.createElement("div", { className: "tabs", style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "period" ? " active" : ""), onClick: () => setMode("period") }, "Pay period"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "day" ? " active" : ""), onClick: () => setMode("day") }, "Day"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (mode === "custom" ? " active" : ""), onClick: () => setMode("custom") }, "Custom range")), mode === "period" && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("label", null, "Pay period"), /* @__PURE__ */ React.createElement("select", { value: periodIdx, onChange: (e) => setPeriodIdx(Number(e.target.value)) }, periods.map((p) => /* @__PURE__ */ React.createElement("option", { key: p.index, value: p.index }, fmtShortYr(p.start), " \u2013 ", fmtShortYr(p.end), "  \xB7  paid ", fmtShortYr(p.payday), p.index === currentPeriodIndex() ? "  (current)" : ""))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: "var(--muted)" } }, "Payday ", /* @__PURE__ */ React.createElement("strong", null, fmtShortYr(selPeriod.payday))), locked ? /* @__PURE__ */ React.createElement("span", { className: "pill", style: { background: "var(--danger-soft)", color: "var(--danger)" } }, "\u{1F512} Locked", manualLocked ? " (manual)" : autoLocked ? " (72h pre-payday)" : "") : /* @__PURE__ */ React.createElement("span", { className: "pill", style: { background: "var(--accent-soft)", color: "var(--accent-ink)" } }, "Open", forceUnlocked && autoLocked ? " (admin override)" : ""), /* @__PURE__ */ React.createElement(
     "button",
     {
       className: "btn btn-ghost",
       style: { padding: "5px 12px", fontSize: 13 },
       onClick: () => {
-        toggleLock(periodIdx);
-        showToast(manualLocked ? "Period unlocked" : "Period locked");
+        setPeriodLock(periodIdx, !locked);
+        showToast(locked ? "Period unlocked" : "Period locked");
       }
     },
-    manualLocked ? "Unlock period" : "Lock period now"
-  )), autoLocked && !manualLocked && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 6 } }, "Auto-locked because it's within 72 hours of payday. New entries dated in this period will be flagged below.")), mode === "custom" && /* @__PURE__ */ React.createElement("div", { className: "row", style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "From date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: from, onChange: (e) => setFrom(e.target.value) })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "To date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: to, onChange: (e) => setTo(e.target.value) }))), mode === "day" && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("div", { className: "period-nav" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: prevMonth, "aria-label": "Previous month" }, "\u2039"), /* @__PURE__ */ React.createElement("div", { className: "pn-label" }, calLabel), /* @__PURE__ */ React.createElement("button", { onClick: nextMonth, "aria-label": "Next month" }, "\u203A")), /* @__PURE__ */ React.createElement("div", { className: "period-total" }, "Showing ", /* @__PURE__ */ React.createElement("span", { className: "pay", style: { marginLeft: 6 } }, fmtShortYr(dayDate)))), /* @__PURE__ */ React.createElement("p", { className: "hint", style: { marginTop: 0, marginBottom: 10 } }, "Tap a date to see that day's per-NP breakdown below. Each cell shows the total logged that day."), /* @__PURE__ */ React.createElement("div", { className: "week-grid" }, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => /* @__PURE__ */ React.createElement("div", { className: "dow", key: "cd" + d }, d)), calCells.map((d, i) => {
+    locked ? "Unlock period" : "Lock period now"
+  )), autoLocked && !manualLocked && !forceUnlocked && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 6 } }, "Auto-locked because it's within 72 hours of payday. New entries dated in this period will be flagged below. Use \u201CUnlock period\u201D to override."), forceUnlocked && autoLocked && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 6, color: "var(--amber)" } }, "\u26A0 You've manually unlocked this period even though it's within 72 hours of payday \u2014 entries can be edited again.")), mode === "custom" && /* @__PURE__ */ React.createElement("div", { className: "row", style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "From date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: from, onChange: (e) => setFrom(e.target.value) })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "To date"), /* @__PURE__ */ React.createElement("input", { type: "date", value: to, onChange: (e) => setTo(e.target.value) }))), mode === "day" && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("div", { className: "period-nav" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: prevMonth, "aria-label": "Previous month" }, "\u2039"), /* @__PURE__ */ React.createElement("div", { className: "pn-label" }, calLabel), /* @__PURE__ */ React.createElement("button", { onClick: nextMonth, "aria-label": "Next month" }, "\u203A")), /* @__PURE__ */ React.createElement("div", { className: "period-total" }, "Showing ", /* @__PURE__ */ React.createElement("span", { className: "pay", style: { marginLeft: 6 } }, fmtShortYr(dayDate)))), /* @__PURE__ */ React.createElement("p", { className: "hint", style: { marginTop: 0, marginBottom: 10 } }, "Tap a date to see that day's per-NP breakdown below. Each cell shows the total logged that day."), /* @__PURE__ */ React.createElement("div", { className: "week-grid" }, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => /* @__PURE__ */ React.createElement("div", { className: "dow", key: "cd" + d }, d)), calCells.map((d, i) => {
     if (d === null) return /* @__PURE__ */ React.createElement("div", { key: "blank" + i });
     const iso = fmtISO(new Date(calY, calM, d));
     const tot = dayTotal(iso);
