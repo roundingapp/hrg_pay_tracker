@@ -20,6 +20,9 @@ const PTO_ENABLED = false;
 const PTO_TEST_USERS = /* @__PURE__ */ new Set(["nsutaria"]);
 const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username || "").trim().toLowerCase());
 const ptoEligible = (emp) => !!emp && ptoVisibleFor(emp.username) && Number(emp.ptoDays) > 0;
+const ROLE_CANON = ["MD", "NP", "Staff", "Scribe"];
+const ROLE_RANK = { md: 0, np: 1, staff: 2, scribe: 3 };
+const ROLE_LABEL = { md: "MD", np: "NP", staff: "Staff", scribe: "Scribe" };
 function ptoYearStartDate(startDate) {
   if (!startDate) return null;
   const s = parseDate(startDate);
@@ -1642,25 +1645,6 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   useEffect(() => {
     if (!dirtyR.current) setDraft(mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salariesRef.current));
   }, [employees, salaries]);
-  useEffect(() => {
-    if (!window.Sortable || !listRef.current) return;
-    const s = window.Sortable.create(listRef.current, {
-      handle: ".drag-handle",
-      animation: 150,
-      forceFallback: true,
-      fallbackTolerance: 4,
-      onEnd: (evt) => {
-        const { oldIndex, newIndex } = evt;
-        if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
-        const a = draftRef.current.slice();
-        const [m] = a.splice(oldIndex, 1);
-        a.splice(newIndex, 0, m);
-        setDraft(a);
-        save(a);
-      }
-    });
-    return () => s.destroy();
-  }, []);
   const addEmp = () => {
     const name = newName.trim();
     if (!name) return;
@@ -1690,7 +1674,25 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map((e) => e.id === id ? { ...e, role: val } : e));
     markDirty();
   };
-  const roleOptions = [...new Set(draft.map((e) => String(e.role || "").trim()).filter(Boolean))].sort();
+  const inUseRoles = [...new Set(draft.map((e) => String(e.role || "").trim()).filter(Boolean))];
+  const roleOptions = [...ROLE_CANON, ...inUseRoles.filter((r) => !ROLE_CANON.some((c) => c.toLowerCase() === r.toLowerCase())).sort()];
+  const roleGroups = (() => {
+    const by = {};
+    for (const e of draft) {
+      const k = String(e.role || "").trim().toLowerCase();
+      (by[k] = by[k] || []).push(e);
+    }
+    const keys = Object.keys(by).sort((a, b) => {
+      const ra = a in ROLE_RANK ? ROLE_RANK[a] : a === "" ? 99 : 50;
+      const rb = b in ROLE_RANK ? ROLE_RANK[b] : b === "" ? 99 : 50;
+      return ra !== rb ? ra - rb : a.localeCompare(b);
+    });
+    return keys.map((k) => ({
+      key: k || "_unassigned",
+      label: k === "" ? "Unassigned" : ROLE_LABEL[k] || k.charAt(0).toUpperCase() + k.slice(1),
+      emps: by[k].slice().sort((a, b) => lastFirst(a.name || "").localeCompare(lastFirst(b.name || "")))
+    }));
+  })();
   const setUsername = (id, val) => {
     setDraft(draft.map((e) => e.id === id ? { ...e, username: val } : e));
     markDirty();
@@ -1856,10 +1858,10 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       onChange: (e) => setNewName(e.target.value),
       onKeyDown: (e) => e.key === "Enter" && addEmp()
     }
-  ), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: addEmp }, "Add")), draft.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "empty" }, "No employees yet. Add your first staff member above."), draft.length > 1 && /* @__PURE__ */ React.createElement("div", { className: "rates-toolbar" }, /* @__PURE__ */ React.createElement("button", { onClick: expandAll }, "Expand all"), /* @__PURE__ */ React.createElement("button", { onClick: collapseAll }, "Collapse all")), /* @__PURE__ */ React.createElement("datalist", { id: "hrg-role-options" }, roleOptions.map((r) => /* @__PURE__ */ React.createElement("option", { key: r, value: r }))), /* @__PURE__ */ React.createElement("div", { ref: listRef }, draft.map((emp) => {
+  ), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: addEmp }, "Add")), draft.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "empty" }, "No employees yet. Add your first staff member above."), draft.length > 1 && /* @__PURE__ */ React.createElement("div", { className: "rates-toolbar" }, /* @__PURE__ */ React.createElement("button", { onClick: expandAll }, "Expand all"), /* @__PURE__ */ React.createElement("button", { onClick: collapseAll }, "Collapse all")), /* @__PURE__ */ React.createElement("datalist", { id: "hrg-role-options" }, roleOptions.map((r) => /* @__PURE__ */ React.createElement("option", { key: r, value: r }))), /* @__PURE__ */ React.createElement("div", null, roleGroups.map((g) => /* @__PURE__ */ React.createElement("div", { className: "role-group", key: g.key }, /* @__PURE__ */ React.createElement("div", { className: "role-header" }, g.label, " ", /* @__PURE__ */ React.createElement("span", { className: "role-count" }, g.emps.length)), g.emps.map((emp) => {
     const open = openIds.has(emp.id);
     const meta = empMeta(emp);
-    return /* @__PURE__ */ React.createElement("div", { className: "emp-rate-block" + (open ? " open" : " collapsed"), key: emp.id }, /* @__PURE__ */ React.createElement("div", { className: "ename" }, /* @__PURE__ */ React.createElement("span", { className: "drag-handle", title: "Drag to reorder" }, "\u283F"), /* @__PURE__ */ React.createElement("div", { className: "emp-head", onClick: () => toggleOpen(emp.id) }, /* @__PURE__ */ React.createElement("span", { className: "emp-chev" }, open ? "\u25BE" : "\u25B8"), /* @__PURE__ */ React.createElement("span", { className: "emp-name-txt" }, lastFirst(emp.name) || "Unnamed employee"), !open && /* @__PURE__ */ React.createElement("span", { className: "emp-meta" + (meta.warn ? " warn" : "") }, meta.user, " \xB7 ", meta.right)), open && /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", onClick: () => removeEmp(emp.id) }, "Remove")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "emp-section", style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Name"), /* @__PURE__ */ React.createElement("input", { type: "text", value: emp.name, onChange: (e) => setName(emp.id, e.target.value), style: { fontWeight: 600 } })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Role"), /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", { className: "emp-rate-block" + (open ? " open" : " collapsed"), key: emp.id }, /* @__PURE__ */ React.createElement("div", { className: "ename" }, /* @__PURE__ */ React.createElement("div", { className: "emp-head", onClick: () => toggleOpen(emp.id) }, /* @__PURE__ */ React.createElement("span", { className: "emp-chev" }, open ? "\u25BE" : "\u25B8"), /* @__PURE__ */ React.createElement("span", { className: "emp-name-txt" }, lastFirst(emp.name) || "Unnamed employee"), !open && /* @__PURE__ */ React.createElement("span", { className: "emp-meta" + (meta.warn ? " warn" : "") }, meta.user, " \xB7 ", meta.right)), open && /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", onClick: () => removeEmp(emp.id) }, "Remove")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "emp-section", style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Name"), /* @__PURE__ */ React.createElement("input", { type: "text", value: emp.name, onChange: (e) => setName(emp.id, e.target.value), style: { fontWeight: 600 } })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Role"), /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "text",
@@ -1926,7 +1928,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
         onChange: (e) => setRate(emp.id, t.key, e.target.value)
       }
     )))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("label", null, "Entered by"), /* @__PURE__ */ React.createElement("select", { value: emp.managedBy || "", onChange: (e) => setManagedBy(emp.id, e.target.value), style: { maxWidth: 340 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Self \u2014 logs in & enters their own"), /* @__PURE__ */ React.createElement("option", { value: "ADMIN" }, "Administrator \u2014 you enter their hours"), draft.filter((m) => m.isManager && m.id !== emp.id).map((m) => /* @__PURE__ */ React.createElement("option", { key: m.id, value: m.id }, "Entered by ", lastFirst(m.name) || "(unnamed manager)"))))), !emp.salaryOnly && emp.isManager && /* @__PURE__ */ React.createElement("div", { className: "hint-sm", style: { marginTop: 6 } }, "Assign staff to this manager via each person's ", /* @__PURE__ */ React.createElement("strong", null, "Entered by"), " field."))));
-  })), draft.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "actions", style: { justifyContent: "flex-end", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 500, color: blockReason ? "var(--amber)" : "var(--accent-ink)" } }, saving ? "Saving\u2026" : blockReason ? blockReason : dirty ? "Saving\u2026" : "\u2713 All changes saved")));
+  })))), draft.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "actions", style: { justifyContent: "flex-end", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 500, color: blockReason ? "var(--amber)" : "var(--accent-ink)" } }, saving ? "Saving\u2026" : blockReason ? blockReason : dirty ? "Saving\u2026" : "\u2713 All changes saved")));
 }
 function AllEntries({ employees, entries, deleteEntry, showToast }) {
   const nameOf = (e) => {
