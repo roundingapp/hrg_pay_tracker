@@ -120,14 +120,15 @@ function periodByIndex(i) {
 }
 // is a period locked right now? (auto: 72h before payday)
 function isPeriodLocked(p, now = new Date()) { return now >= p.lockAt; }
-// combined lock: auto-lock OR owner manual lock
-function isPeriodLockedCombined(periodIndex, manualLocks, now = new Date()) {
-  if (Array.isArray(manualLocks) && manualLocks.includes(periodIndex)) return true;
-  return isPeriodLocked(periodByIndex(periodIndex), now);
+// combined lock: an admin force-unlock overrides everything, then admin force-lock, then auto-lock
+function isPeriodLockedCombined(periodIndex, manualLocks, manualUnlocks = [], now = new Date()) {
+  if (Array.isArray(manualUnlocks) && manualUnlocks.includes(periodIndex)) return false;   // admin override: unlocked
+  if (Array.isArray(manualLocks) && manualLocks.includes(periodIndex)) return true;         // admin force-lock
+  return isPeriodLocked(periodByIndex(periodIndex), now);                                    // auto (72h pre-payday)
 }
 // is a given ISO date inside any locked period?
-function dateInLockedPeriod(iso, manualLocks, now = new Date()) {
-  return isPeriodLockedCombined(periodIndexFor(iso), manualLocks, now);
+function dateInLockedPeriod(iso, manualLocks, manualUnlocks = [], now = new Date()) {
+  return isPeriodLockedCombined(periodIndexFor(iso), manualLocks, manualUnlocks, now);
 }
 // the period index for "today"
 function currentPeriodIndex() { return periodIndexFor(todayISO()); }
@@ -346,7 +347,7 @@ async function loadPublicRoster() {
 // Office manager: a scoped login that enters hours on behalf of assigned staff (no pay of their own).
 // Reuses EntryView per selected employee; entries live in the manager's own doc, tagged by empId,
 // so they roll up to the owner exactly like self-entry.
-function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, showToast }) {
+function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, manualUnlocks, showToast }) {
   const managed = employees.filter(e => e.managedBy === manager.id);
   const [selId, setSelId] = useState(() => (managed[0] ? managed[0].id : null));
   const sel = managed.find(e => e.id === selId) || managed[0] || null;
@@ -364,7 +365,7 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, sh
           ))}
         </div>
       </div>
-      {sel && <EntryView key={sel.id} emp={sel} entries={entries} upsertEntry={upsertEntry} certs={{}} certifyPeriod={()=>{}} manualLocks={manualLocks} showToast={showToast} />}
+      {sel && <EntryView key={sel.id} emp={sel} entries={entries} upsertEntry={upsertEntry} certs={{}} certifyPeriod={()=>{}} manualLocks={manualLocks} manualUnlocks={manualUnlocks} showToast={showToast} />}
     </>
   );
 }
@@ -537,6 +538,7 @@ function App() {
   const [impersonateDoc, setImpersonateDoc] = useState(null); // the entries doc that employee's data lives in
   const [impersonateCerts, setImpersonateCerts] = useState({});
   const [manualLocks, setManualLocks] = useState([]);
+  const [manualUnlocks, setManualUnlocks] = useState([]);   // admin force-unlocks that override the auto-lock
   const [toast, setToast] = useState("");
 
   const isOwner = isOwnerUser(authUser);
@@ -557,12 +559,13 @@ function App() {
   // load the data appropriate to whoever is signed in
   const refresh = useCallback(async (user) => {
     const u = user || (window._auth && window._auth.currentUser);
-    if (!u) { setEmployees([]); setEntries([]); setManualLocks([]); return; }
+    if (!u) { setEmployees([]); setEntries([]); setManualLocks([]); setManualUnlocks([]); return; }
     const owner = isOwnerUser(u);
     // fire every read at once (they're independent) — was 8 sequential round-trips
-    const [emps, locks, entries, certs, salaries, mySalary, adjustments, myAdj, myPto, everyPto] = await Promise.all([
+    const [emps, locks, unlocks, entries, certs, salaries, mySalary, adjustments, myAdj, myPto, everyPto] = await Promise.all([
       sGet("employees", null),
       sGet("manualLocks", []),
+      sGet("manualUnlocks", []),
       owner ? loadAllEntries() : loadEntriesForUid(u.uid),
       owner ? Promise.resolve({}) : loadCertsForUid(u.uid),
       owner ? loadSalaries() : Promise.resolve({}),
@@ -574,6 +577,7 @@ function App() {
     ]);
     setEmployees(emps && emps.length ? emps : []);
     setManualLocks(Array.isArray(locks) ? locks : []);
+    setManualUnlocks(Array.isArray(unlocks) ? unlocks : []);
     setEntries(entries);
     setCerts(certs);
     setSalaries(salaries);
@@ -677,13 +681,17 @@ function App() {
     await savePto(docId, [...latest, ...fresh]);
     setAllPto(await loadAllPto());
   }, [allPto, entries]);
-  const toggleLock = useCallback(async (periodIndex) => {
-    const latest = await sGet("manualLocks", []);
-    const set = new Set(Array.isArray(latest) ? latest : []);
-    if (set.has(periodIndex)) set.delete(periodIndex); else set.add(periodIndex);
-    const next = [...set];
-    setManualLocks(next);
-    await sSet("manualLocks", next);
+  // admin sets a period's lock state explicitly. shouldLock=true → force-locked; false → force-unlocked
+  // (overrides the 72h auto-lock). The two lists are kept mutually exclusive.
+  const setPeriodLock = useCallback(async (periodIndex, shouldLock) => {
+    const curLocks = new Set((await sGet("manualLocks", [])) || []);
+    const curUnlocks = new Set((await sGet("manualUnlocks", [])) || []);
+    if (shouldLock) { curLocks.add(periodIndex); curUnlocks.delete(periodIndex); }
+    else { curUnlocks.add(periodIndex); curLocks.delete(periodIndex); }
+    const nextLocks = [...curLocks], nextUnlocks = [...curUnlocks];
+    setManualLocks(nextLocks); setManualUnlocks(nextUnlocks);
+    await sSet("manualLocks", nextLocks);
+    await sSet("manualUnlocks", nextUnlocks);
   }, []);
 
   // NP upsert: one row per (empId,date) inside this NP's own entries doc
@@ -839,9 +847,9 @@ function App() {
           </div>
           {impersonate.isManager
             ? <ManagerView key={impersonate.id} manager={impersonate} employees={employees} entries={entries}
-                upsertEntry={upsertForImpersonated} manualLocks={manualLocks} showToast={showToast} />
+                upsertEntry={upsertForImpersonated} manualLocks={manualLocks} manualUnlocks={manualUnlocks} showToast={showToast} />
             : <EntryView key={impersonate.id} emp={impersonate} entries={entries} upsertEntry={upsertForImpersonated}
-                certs={impersonateCerts} certifyPeriod={certifyForImpersonated} manualLocks={manualLocks}
+                certs={impersonateCerts} certifyPeriod={certifyForImpersonated} manualLocks={manualLocks} manualUnlocks={manualUnlocks}
                 audit={true} baseSalary={salaries[impersonate.id]}
                 empAdj={(() => { const o = {}; for (const [p, byEmp] of Object.entries(adjustments||{})) if (byEmp && byEmp[impersonate.id]) o[p] = byEmp[impersonate.id]; return o; })()}
                 pto={allPto.filter(r => r.empId === impersonate.id)} ptoAllowance={impersonate.ptoDays} ptoStartDate={impersonate.startDate}
@@ -853,7 +861,7 @@ function App() {
 
       {/* signed in as owner → full panel */}
       {isOwner && !impersonate && (
-        <OwnerView employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} manualLocks={manualLocks} toggleLock={toggleLock}
+        <OwnerView employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} manualLocks={manualLocks} manualUnlocks={manualUnlocks} setPeriodLock={setPeriodLock}
           persistEmployees={persistEmployees} persistSalaries={persistSalaries} persistAdjustments={persistAdjustments} deleteEntry={deleteOwnerEntry}
           allPto={allPto} onSetPtoStatus={setPtoStatus} onAddPto={addPtoForEmployee}
           onViewAs={startImpersonate} syncedAt={syncedAt} onRefresh={refresh} showToast={showToast} />
@@ -864,10 +872,10 @@ function App() {
         !myEmp
           ? <div className="card"><div className="empty">You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees &amp; rates, then sign out and back in.</div></div>
           : myEmp.isManager
-            ? <ManagerView manager={myEmp} employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} showToast={showToast} />
+            ? <ManagerView manager={myEmp} employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} manualUnlocks={manualUnlocks} showToast={showToast} />
             : myEmp.managedBy
               ? <div className="card"><div className="empty">Your hours are entered for you — there's nothing to log here. Reach out to the office if something looks off.</div></div>
-              : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} baseSalary={mySalary} empAdj={myAdj}
+              : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} manualUnlocks={manualUnlocks} baseSalary={mySalary} empAdj={myAdj}
                   pto={pto} ptoAllowance={myEmp && myEmp.ptoDays} ptoStartDate={myEmp && myEmp.startDate}
                   onRequestPto={ptoEligible(myEmp) ? requestPto : undefined}
                   onCancelPto={ptoEligible(myEmp) ? cancelPto : undefined}
@@ -1049,7 +1057,7 @@ function OwnerLogin({ showToast }) {
 }
 
 /* ---------- entry view ---------- */
-function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, ptoStartDate, onRequestPto, onCancelPto }) {
+function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, manualUnlocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, ptoStartDate, onRequestPto, onCancelPto }) {
   const [ptoOpen, setPtoOpen] = useState(false);
   const ptoEnabled = !!onRequestPto;   // only passed for the staff member's own screen, gated to test users
   const approvedPto = (pto || []).filter(r => r.status === "approved" && r.date >= todayISO())
@@ -1059,6 +1067,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const ptoFmt = (list) => list.map(r => fmtShort(r.date) + (r.half ? " ½" : "")).join(", ");
   const [date, setDate] = useState(todayISO());
   const [counts, setCounts] = useState({});
+  const [shift, setShift] = useState("regular");     // capped NPs: "regular" (cap applies) vs "extra" (no cap)
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
   const [otherOn, setOtherOn] = useState(false);     // "Other" one-off pay for the selected day
   const [otherAmt, setOtherAmt] = useState("");
@@ -1070,7 +1079,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const clearEntryDirty = () => { entryDirtyRef.current = false; setEntryDirty(false); };
 
   // is the chosen date inside a period that's already locked?
-  const dateLocked = date ? dateInLockedPeriod(date, manualLocks) : false;
+  const dateLocked = date ? dateInLockedPeriod(date, manualLocks, manualUnlocks) : false;
 
   // ----- pay-period grid -----
   const maxPeriodIdx = currentPeriodIndex();                // can't advance into a future (un-happened) period
@@ -1089,7 +1098,8 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const capped = cap > 0;
   const cert = certs && certs[String(periodIdx)];
   const certifiedForPeriod = !capped || (cert && Number(cert.cap) === cap);
-  const gateOpen = certifiedForPeriod || !!audit;   // owner audit ("view as") edits past the cap gate
+  const onExtraShift = capped && shift === "extra";   // extra shifts aren't cap-covered → no cert gate
+  const gateOpen = certifiedForPeriod || onExtraShift || !!audit;   // owner audit ("view as") edits past the cap gate
   const baseBiweekly = Number(baseSalary) > 0 ? Number(baseSalary) / 26 : 0;   // shown when known (owner view-as / NP own)
   const periodAdj = (empAdj && empAdj[String(periodIdx)]) || {};   // this period's bonus / reimbursement
   const periodBonus = Number(periodAdj.bonus) || 0;
@@ -1111,6 +1121,8 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
       merged[k] = (merged[k] || 0) + Number(v || 0);
     }));
     setCounts(merged);
+    const withShift = es.find(e => e.shift);
+    setShift(withShift && withShift.shift === "extra" ? "extra" : "regular");   // default regular
     const withOther = es.find(e => e.other && Number(e.other.amount) > 0);
     if (withOther) { setOtherOn(true); setOtherAmt(String(withOther.other.amount)); setOtherNote(withOther.other.note || ""); }
     else { setOtherOn(false); setOtherAmt(""); setOtherNote(""); }
@@ -1156,6 +1168,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     const id = (existing[0] && existing[0].id) || ("e_"+Date.now()+"_"+Math.random().toString(36).slice(2,7));
     const entry = { id, empId: emp.id, username: normU(emp.username), date, counts: cleanCounts };
     if (other) entry.other = other;
+    if (capped) entry.shift = shift;   // regular (cap applies) vs extra (no cap) — only meaningful for capped NPs
     return { entry };
   };
   const saveEntry = async () => {
@@ -1220,7 +1233,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
             {DOW.map(d => <div className="dow" key={"dow-"+d}>{d}</div>)}
             {periodDays.map(iso => {
               const logged = dayEntries(iso).length > 0;
-              const locked = dateInLockedPeriod(iso, manualLocks);
+              const locked = dateInLockedPeriod(iso, manualLocks, manualUnlocks);
               const future = iso > todayISO();
               const cls = "day-cell"
                 + (iso===date ? " selected" : "")
@@ -1247,7 +1260,22 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
         </>
       )}
 
-      {emp && capped && !certifiedForPeriod && !audit && (
+      {emp && capped && !dateLocked && (
+        <div style={{marginTop:14}}>
+          <label style={{marginBottom:6}}>Shift type for {fmtShort(date)}</label>
+          <div className="tabs" style={{marginBottom:0}}>
+            <button className={"tab"+(shift==="regular"?" active":"")} onClick={()=>{ if (shift!=="regular") { setShift("regular"); markEntryDirty(); } }}>Regular shift</button>
+            <button className={"tab"+(shift==="extra"?" active":"")} onClick={()=>{ if (shift!=="extra") { setShift("extra"); markEntryDirty(); } }}>Extra shift</button>
+          </div>
+          {onExtraShift && (
+            <div className="fixed-note" style={{marginTop:8, color:"var(--accent-ink)"}}>
+              Extra shift — not covered by your salary cap. Log <strong>every</strong> patient you saw; no certification needed.
+            </div>
+          )}
+        </div>
+      )}
+
+      {emp && capped && shift==="regular" && !certifiedForPeriod && !audit && (
         <div className="cap-gate">
           <div className="cap-gate-title">⚠ Salary cap</div>
           <div className="cap-gate-body">
@@ -1259,12 +1287,12 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
           </label>
         </div>
       )}
-      {emp && capped && !certifiedForPeriod && audit && (
+      {emp && capped && shift==="regular" && !certifiedForPeriod && audit && (
         <div className="fixed-note" style={{marginTop:14, color:"var(--amber)"}}>
           ⚠ Hasn't certified the {cap}-patient cap this period — you're editing as owner (audit).
         </div>
       )}
-      {emp && capped && certifiedForPeriod && (
+      {emp && capped && shift==="regular" && certifiedForPeriod && (
         <div className="fixed-note" style={{marginTop:14, color:"var(--accent-ink)"}}>
           ✓ Certified for {periodLabel} — logging additional patients.
         </div>
@@ -1359,7 +1387,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
 }
 
 /* ---------- owner view ---------- */
-function OwnerView({ employees, entries, salaries, adjustments, manualLocks, toggleLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, allPto, onSetPtoStatus, onAddPto, onViewAs, syncedAt, onRefresh, showToast }) {
+function OwnerView({ employees, entries, salaries, adjustments, manualLocks, manualUnlocks, setPeriodLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, allPto, onSetPtoStatus, onAddPto, onViewAs, syncedAt, onRefresh, showToast }) {
   const [sub, setSub] = useState("rollup");
   const [refreshing, setRefreshing] = useState(false);
   const doRefresh = async () => { setRefreshing(true); try { await onRefresh(); } finally { setRefreshing(false); } };
@@ -1388,7 +1416,7 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, tog
           )}
         </div>
       </div>
-      {sub==="rollup"  && <Rollup employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} persistAdjustments={persistAdjustments} manualLocks={manualLocks} toggleLock={toggleLock} showToast={showToast} />}
+      {sub==="rollup"  && <Rollup employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} persistAdjustments={persistAdjustments} manualLocks={manualLocks} manualUnlocks={manualUnlocks} setPeriodLock={setPeriodLock} showToast={showToast} />}
       {sub==="rates"   && <Rates employees={employees} salaries={salaries} persistEmployees={persistEmployees} persistSalaries={persistSalaries} showToast={showToast} />}
       {sub==="entries" && <AllEntries employees={employees} entries={entries} deleteEntry={deleteEntry} showToast={showToast} />}
       {sub==="pto"     && <PtoAdmin employees={employees} allPto={allPto} onSetStatus={onSetPtoStatus} onAddPto={onAddPto} showToast={showToast} />}
@@ -1410,7 +1438,7 @@ function payForEntry(emp, entry) {
   return total;
 }
 
-function Rollup({ employees, entries, salaries, adjustments, persistAdjustments, manualLocks, toggleLock, showToast }) {
+function Rollup({ employees, entries, salaries, adjustments, persistAdjustments, manualLocks, manualUnlocks, setPeriodLock, showToast }) {
   const periods = periodList(10, 0);                 // selectable window — no future periods (until their first day)
   const [mode, setMode] = useState("period");        // "period" | "day" | "custom"
   const [periodIdx, setPeriodIdx] = useState(currentPeriodIndex());
@@ -1432,7 +1460,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
   const [calM, setCalM] = useState(parseDate(todayISO()).getMonth());   // 0-11
 
   const selPeriod = periodByIndex(periodIdx);
-  const locked = isPeriodLockedCombined(periodIdx, manualLocks);
+  const locked = isPeriodLockedCombined(periodIdx, manualLocks, manualUnlocks);
 
   // owner-only editable overrides/adjustments, debounced auto-save (like the roster editor)
   const [adjDraft, setAdjDraft] = useState(adjustments || {});
@@ -1618,6 +1646,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
 
   const autoLocked = isPeriodLocked(selPeriod);
   const manualLocked = Array.isArray(manualLocks) && manualLocks.includes(periodIdx);
+  const forceUnlocked = Array.isArray(manualUnlocks) && manualUnlocks.includes(periodIdx);
 
   return (
     <div className="card">
@@ -1664,16 +1693,21 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
                 🔒 Locked{manualLocked ? " (manual)" : autoLocked ? " (72h pre-payday)" : ""}
               </span>
             ) : (
-              <span className="pill" style={{background:"var(--accent-soft)", color:"var(--accent-ink)"}}>Open</span>
+              <span className="pill" style={{background:"var(--accent-soft)", color:"var(--accent-ink)"}}>Open{forceUnlocked && autoLocked ? " (admin override)" : ""}</span>
             )}
             <button className="btn btn-ghost" style={{padding:"5px 12px", fontSize:13}}
-              onClick={()=>{ toggleLock(periodIdx); showToast(manualLocked ? "Period unlocked" : "Period locked"); }}>
-              {manualLocked ? "Unlock period" : "Lock period now"}
+              onClick={()=>{ setPeriodLock(periodIdx, !locked); showToast(locked ? "Period unlocked" : "Period locked"); }}>
+              {locked ? "Unlock period" : "Lock period now"}
             </button>
           </div>
-          {autoLocked && !manualLocked && (
+          {autoLocked && !manualLocked && !forceUnlocked && (
             <div className="fixed-note" style={{marginTop:6}}>
-              Auto-locked because it's within 72 hours of payday. New entries dated in this period will be flagged below.
+              Auto-locked because it's within 72 hours of payday. New entries dated in this period will be flagged below. Use “Unlock period” to override.
+            </div>
+          )}
+          {forceUnlocked && autoLocked && (
+            <div className="fixed-note" style={{marginTop:6, color:"var(--amber)"}}>
+              ⚠ You've manually unlocked this period even though it's within 72 hours of payday — entries can be edited again.
             </div>
           )}
         </div>
