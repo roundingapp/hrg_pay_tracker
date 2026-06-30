@@ -29,6 +29,10 @@ const PTO_TEST_USERS = new Set(["nsutaria"]);
 const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username||"").trim().toLowerCase());
 // a person sees PTO only if the feature is on for them AND they actually have a PTO allowance (>0)
 const ptoEligible = (emp) => !!emp && ptoVisibleFor(emp.username) && Number(emp.ptoDays) > 0;
+// employee roles — canonical set + display order for the roster grouping
+const ROLE_CANON = ["MD", "NP", "Staff", "Scribe"];
+const ROLE_RANK = { md: 0, np: 1, staff: 2, scribe: 3 };
+const ROLE_LABEL = { md: "MD", np: "NP", staff: "Staff", scribe: "Scribe" };
 // PTO resets each year on the employee's work anniversary (their start date). Returns the Date that
 // the CURRENT PTO year began (the most recent anniversary on or before today), or null if no start date.
 function ptoYearStartDate(startDate) {
@@ -1875,25 +1879,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   // pull in saved data, but never clobber unsaved local edits (e.g. on a background refresh)
   useEffect(() => { if (!dirtyR.current) setDraft(mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salariesRef.current)); }, [employees, salaries]);
 
-  // drag-to-reorder the roster (touch + mouse) via SortableJS — auto-saves the new order
-  useEffect(() => {
-    if (!window.Sortable || !listRef.current) return;
-    const s = window.Sortable.create(listRef.current, {
-      handle: ".drag-handle",
-      animation: 150,
-      forceFallback: true,
-      fallbackTolerance: 4,
-      onEnd: (evt) => {
-        const { oldIndex, newIndex } = evt;
-        if (oldIndex == null || newIndex == null || oldIndex === newIndex) return;
-        const a = draftRef.current.slice();
-        const [m] = a.splice(oldIndex, 1); a.splice(newIndex, 0, m);
-        setDraft(a);
-        save(a);   // auto-save the new roster order
-      },
-    });
-    return () => s.destroy();
-  }, []);
+  // (roster order is now derived: grouped by role, alphabetical within — no manual drag-to-reorder)
 
   const addEmp = () => {
     const name = newName.trim();
@@ -1921,8 +1907,24 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map(e => e.id===id ? {...e, role: val} : e));
     markDirty();
   };
-  // roles are free-form and shared: the option list is just whatever's already in use
-  const roleOptions = [...new Set(draft.map(e => String(e.role||"").trim()).filter(Boolean))].sort();
+  // role suggestions: the four canonical roles first, then any other roles already in use
+  const inUseRoles = [...new Set(draft.map(e => String(e.role||"").trim()).filter(Boolean))];
+  const roleOptions = [...ROLE_CANON, ...inUseRoles.filter(r => !ROLE_CANON.some(c => c.toLowerCase() === r.toLowerCase())).sort()];
+  // group + order the roster for display: MD, NP, Staff, Scribe, then other roles, then unassigned
+  const roleGroups = (() => {
+    const by = {};
+    for (const e of draft) { const k = String(e.role||"").trim().toLowerCase(); (by[k] = by[k] || []).push(e); }
+    const keys = Object.keys(by).sort((a,b) => {
+      const ra = a in ROLE_RANK ? ROLE_RANK[a] : (a === "" ? 99 : 50);
+      const rb = b in ROLE_RANK ? ROLE_RANK[b] : (b === "" ? 99 : 50);
+      return ra !== rb ? ra - rb : a.localeCompare(b);
+    });
+    return keys.map(k => ({
+      key: k || "_unassigned",
+      label: k === "" ? "Unassigned" : (ROLE_LABEL[k] || (k.charAt(0).toUpperCase() + k.slice(1))),
+      emps: by[k].slice().sort((a,b) => lastFirst(a.name||"").localeCompare(lastFirst(b.name||""))),
+    }));
+  })();
   const setUsername = (id, val) => {
     setDraft(draft.map(e => e.id===id ? {...e, username: val} : e));
     markDirty();
@@ -2064,14 +2066,16 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       )}
 
       <datalist id="hrg-role-options">{roleOptions.map(r => <option key={r} value={r} />)}</datalist>
-      <div ref={listRef}>
-      {draft.map(emp => {
+      <div>
+      {roleGroups.map(g => (
+        <div className="role-group" key={g.key}>
+          <div className="role-header">{g.label} <span className="role-count">{g.emps.length}</span></div>
+          {g.emps.map(emp => {
         const open = openIds.has(emp.id);
         const meta = empMeta(emp);
         return (
         <div className={"emp-rate-block" + (open ? " open" : " collapsed")} key={emp.id}>
           <div className="ename">
-            <span className="drag-handle" title="Drag to reorder">⠿</span>
             <div className="emp-head" onClick={()=>toggleOpen(emp.id)}>
               <span className="emp-chev">{open ? "▾" : "▸"}</span>
               <span className="emp-name-txt">{lastFirst(emp.name) || "Unnamed employee"}</span>
@@ -2192,6 +2196,8 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
         </div>
         );
       })}
+        </div>
+      ))}
       </div>
 
       {draft.length>0 && (
