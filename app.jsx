@@ -561,36 +561,44 @@ function App() {
   }, []);
 
   // load the data appropriate to whoever is signed in
+  const refreshBusy = useRef(false);
   const refresh = useCallback(async (user) => {
     const u = user || (window._auth && window._auth.currentUser);
     if (!u) { setEmployees([]); setEntries([]); setManualLocks([]); setManualUnlocks([]); return; }
-    const owner = isOwnerUser(u);
-    // fire every read at once (they're independent) — was 8 sequential round-trips
-    const [emps, locks, unlocks, entries, certs, salaries, mySalary, adjustments, myAdj, myPto, everyPto] = await Promise.all([
-      sGet("employees", null),
-      sGet("manualLocks", []),
-      sGet("manualUnlocks", []),
-      owner ? loadAllEntries() : loadEntriesForUid(u.uid),
-      owner ? Promise.resolve({}) : loadCertsForUid(u.uid),
-      owner ? loadSalaries() : Promise.resolve({}),
-      owner ? Promise.resolve(0) : loadMySalary(u.uid),
-      owner ? loadAdjustments() : Promise.resolve({}),
-      owner ? Promise.resolve({}) : loadMyAdj(u.uid),
-      loadPto(u.uid),                                  // the user's own PTO (owner has one too)
-      owner ? loadAllPto() : Promise.resolve([]),      // owner: everyone's PTO
-    ]);
-    setEmployees(emps && emps.length ? emps : []);
-    setManualLocks(Array.isArray(locks) ? locks : []);
-    setManualUnlocks(Array.isArray(unlocks) ? unlocks : []);
-    setEntries(entries);
-    setCerts(certs);
-    setSalaries(salaries);
-    setMySalary(mySalary);
-    setAdjustments(adjustments);
-    setMyAdj(myAdj);
-    setPto(Array.isArray(myPto) ? myPto : []);
-    setAllPto(Array.isArray(everyPto) ? everyPto : []);
-    setSyncedAt(new Date());     // mark data as freshly pulled
+    if (refreshBusy.current) return;   // focus + visibility + heartbeat can stack — one pull at a time
+    refreshBusy.current = true;
+    try {
+      const owner = isOwnerUser(u);
+      // fire every read at once (they're independent) — was 8 sequential round-trips
+      const [emps, locks, unlocks, entries, certs, salaries, mySalary, adjustments, myAdj, myPto, everyPto] = await Promise.all([
+        sGet("employees", null),
+        sGet("manualLocks", []),
+        sGet("manualUnlocks", []),
+        owner ? loadAllEntries() : loadEntriesForUid(u.uid),
+        owner ? Promise.resolve({}) : loadCertsForUid(u.uid),
+        owner ? loadSalaries() : Promise.resolve({}),
+        owner ? Promise.resolve(0) : loadMySalary(u.uid),
+        owner ? loadAdjustments() : Promise.resolve({}),
+        owner ? Promise.resolve({}) : loadMyAdj(u.uid),
+        loadPto(u.uid),                                  // the user's own PTO (owner has one too)
+        owner ? loadAllPto() : Promise.resolve([]),      // owner: everyone's PTO
+      ]);
+      // only touch state that actually changed — an unchanged pull must not re-render, because
+      // browsers close/reset an open <select> (the View-as picker) when its options are rebuilt
+      const setIfChanged = (setter, next) => setter(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+      setIfChanged(setEmployees, emps && emps.length ? emps : []);
+      setIfChanged(setManualLocks, Array.isArray(locks) ? locks : []);
+      setIfChanged(setManualUnlocks, Array.isArray(unlocks) ? unlocks : []);
+      setIfChanged(setEntries, entries);
+      setIfChanged(setCerts, certs);
+      setIfChanged(setSalaries, salaries);
+      setMySalary(mySalary);
+      setIfChanged(setAdjustments, adjustments);
+      setIfChanged(setMyAdj, myAdj);
+      setIfChanged(setPto, Array.isArray(myPto) ? myPto : []);
+      setIfChanged(setAllPto, Array.isArray(everyPto) ? everyPto : []);
+      setSyncedAt(new Date());     // mark data as freshly pulled
+    } finally { refreshBusy.current = false; }
   }, []);
 
   // watch auth state; (re)load data whenever the signed-in user changes
@@ -622,7 +630,9 @@ function App() {
     const ref = window._fs.doc(window._db, "paytracker", "employees");
     const unsub = window._fs.onSnapshot(ref, (snap) => {
       const v = snap.exists() && snap.data() ? snap.data().value : [];
-      setEmployees(Array.isArray(v) ? v : []);
+      const next = Array.isArray(v) ? v : [];
+      // skip no-op snapshots (cache→server echoes) so an open View-as picker isn't reset
+      setEmployees(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
     }, () => {});   // on listener error, the 60s heartbeat still covers it
     return () => { try { unsub && unsub(); } catch (e) {} };
   }, [uid]);
@@ -757,9 +767,11 @@ function App() {
       docId = (entries.find(e => e.empId === emp.id) || {})._uid || emp.id;
     }
     setImpersonateDoc(docId);
-    setImpersonateCerts(await loadCertsForUid(docId));
-    setImpersonate(emp);
+    setImpersonateCerts({});
+    setImpersonate(emp);            // show their page immediately — don't block on the certs read
     try { window.scrollTo(0, 0); } catch (e) {}
+    // certs only affect the cap-cert banner (audit mode bypasses the gate), so they can fill in late
+    loadCertsForUid(docId).then(setImpersonateCerts).catch(() => {});
   }, [entries, employees]);
   const exitImpersonate = useCallback(() => { setImpersonate(null); setImpersonateDoc(null); setImpersonateCerts({}); }, []);
   // owner edits on an employee's behalf — writes to THEIR entries doc (rules allow it: isOwner)

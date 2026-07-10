@@ -513,6 +513,7 @@ function App() {
     setToast(msg);
     setTimeout(() => setToast(""), 2200);
   }, []);
+  const refreshBusy = useRef(false);
   const refresh = useCallback(async (user) => {
     const u = user || window._auth && window._auth.currentUser;
     if (!u) {
@@ -522,34 +523,41 @@ function App() {
       setManualUnlocks([]);
       return;
     }
-    const owner = isOwnerUser(u);
-    const [emps, locks, unlocks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2, myPto, everyPto] = await Promise.all([
-      sGet("employees", null),
-      sGet("manualLocks", []),
-      sGet("manualUnlocks", []),
-      owner ? loadAllEntries() : loadEntriesForUid(u.uid),
-      owner ? Promise.resolve({}) : loadCertsForUid(u.uid),
-      owner ? loadSalaries() : Promise.resolve({}),
-      owner ? Promise.resolve(0) : loadMySalary(u.uid),
-      owner ? loadAdjustments() : Promise.resolve({}),
-      owner ? Promise.resolve({}) : loadMyAdj(u.uid),
-      loadPto(u.uid),
-      // the user's own PTO (owner has one too)
-      owner ? loadAllPto() : Promise.resolve([])
-      // owner: everyone's PTO
-    ]);
-    setEmployees(emps && emps.length ? emps : []);
-    setManualLocks(Array.isArray(locks) ? locks : []);
-    setManualUnlocks(Array.isArray(unlocks) ? unlocks : []);
-    setEntries(entries2);
-    setCerts(certs2);
-    setSalaries(salaries2);
-    setMySalary(mySalary2);
-    setAdjustments(adjustments2);
-    setMyAdj(myAdj2);
-    setPto(Array.isArray(myPto) ? myPto : []);
-    setAllPto(Array.isArray(everyPto) ? everyPto : []);
-    setSyncedAt(/* @__PURE__ */ new Date());
+    if (refreshBusy.current) return;
+    refreshBusy.current = true;
+    try {
+      const owner = isOwnerUser(u);
+      const [emps, locks, unlocks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2, myPto, everyPto] = await Promise.all([
+        sGet("employees", null),
+        sGet("manualLocks", []),
+        sGet("manualUnlocks", []),
+        owner ? loadAllEntries() : loadEntriesForUid(u.uid),
+        owner ? Promise.resolve({}) : loadCertsForUid(u.uid),
+        owner ? loadSalaries() : Promise.resolve({}),
+        owner ? Promise.resolve(0) : loadMySalary(u.uid),
+        owner ? loadAdjustments() : Promise.resolve({}),
+        owner ? Promise.resolve({}) : loadMyAdj(u.uid),
+        loadPto(u.uid),
+        // the user's own PTO (owner has one too)
+        owner ? loadAllPto() : Promise.resolve([])
+        // owner: everyone's PTO
+      ]);
+      const setIfChanged = (setter, next) => setter((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
+      setIfChanged(setEmployees, emps && emps.length ? emps : []);
+      setIfChanged(setManualLocks, Array.isArray(locks) ? locks : []);
+      setIfChanged(setManualUnlocks, Array.isArray(unlocks) ? unlocks : []);
+      setIfChanged(setEntries, entries2);
+      setIfChanged(setCerts, certs2);
+      setIfChanged(setSalaries, salaries2);
+      setMySalary(mySalary2);
+      setIfChanged(setAdjustments, adjustments2);
+      setIfChanged(setMyAdj, myAdj2);
+      setIfChanged(setPto, Array.isArray(myPto) ? myPto : []);
+      setIfChanged(setAllPto, Array.isArray(everyPto) ? everyPto : []);
+      setSyncedAt(/* @__PURE__ */ new Date());
+    } finally {
+      refreshBusy.current = false;
+    }
   }, []);
   useEffect(() => {
     if (!window._auth || !window._authfns) {
@@ -584,7 +592,8 @@ function App() {
     const ref = window._fs.doc(window._db, "paytracker", "employees");
     const unsub = window._fs.onSnapshot(ref, (snap) => {
       const v = snap.exists() && snap.data() ? snap.data().value : [];
-      setEmployees(Array.isArray(v) ? v : []);
+      const next = Array.isArray(v) ? v : [];
+      setEmployees((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
     }, () => {
     });
     return () => {
@@ -705,12 +714,14 @@ function App() {
       docId = (entries.find((e) => e.empId === emp.id) || {})._uid || emp.id;
     }
     setImpersonateDoc(docId);
-    setImpersonateCerts(await loadCertsForUid(docId));
+    setImpersonateCerts({});
     setImpersonate(emp);
     try {
       window.scrollTo(0, 0);
     } catch (e) {
     }
+    loadCertsForUid(docId).then(setImpersonateCerts).catch(() => {
+    });
   }, [entries, employees]);
   const exitImpersonate = useCallback(() => {
     setImpersonate(null);
