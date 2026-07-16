@@ -376,7 +376,7 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, ma
 }
 
 // PTO request calendar (modal): month view, weekdays only, tap a day to cycle full → ½ → off.
-function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel }) {
+function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel, allowPast }) {
   const todayStr = todayISO();
   const t0 = parseDate(todayStr);
   const [calY, setCalY] = useState(t0.getFullYear());
@@ -417,7 +417,7 @@ function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel })
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal pto-modal" onClick={e=>e.stopPropagation()}>
-        <div className="pto-head"><h3>Request PTO</h3><button className="btn btn-ghost" style={{padding:"4px 10px"}} onClick={onClose}>✕</button></div>
+        <div className="pto-head"><h3>{allowPast ? "Enter PTO" : "Request PTO"}</h3><button className="btn btn-ghost" style={{padding:"4px 10px"}} onClick={onClose}>✕</button></div>
         <div className="pto-counter"><strong>{remaining}</strong> of {allow} day{allow===1?"":"s"} left{requestedDays>0 ? <span> · {requestedDays} requested</span> : null}{selDays>0 ? <span> · selecting {selDays}</span> : null}</div>
         <div className="pto-monthnav"><button onClick={prevM} aria-label="Previous month">‹</button><span>{monthName}</span><button onClick={nextM} aria-label="Next month">›</button></div>
         <div className="pto-grid">
@@ -430,12 +430,14 @@ function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel })
             const past = ds < todayStr;
             const ex = byDate[ds];
             const ss = sel[ds];
-            const hardLocked = weekend || past || (ex && ex.status === "approved");   // approved/weekend/past can't change
+            // past days are locked for self-service requests, but the admin can enter already-
+            // taken PTO on someone's behalf (allowPast) — e.g. backfilling days off from earlier.
+            const hardLocked = weekend || (past && !allowPast) || (ex && ex.status === "approved");
             let cls = "pto-cell";
             if (ex && ex.status==="approved") cls += " approved";
             else if (ex && ex.status==="requested") cls += " requested";
             else if (ss) cls += ss.half ? " sel half" : " sel";
-            else if (weekend || past) cls += " muted";
+            else if (weekend || (past && !allowPast)) cls += " muted";
             return (
               <div key={ds} className={cls} onClick={()=>{
                 if (hardLocked) return;
@@ -486,6 +488,7 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
         </select>
       </div>
       {addFor && <PtoCalendar pto={allPto.filter(r=>r.empId===addFor.id)} allowance={addFor.ptoDays} startDate={addFor.startDate}
+        allowPast={true}
         onClose={()=>setAddFor(null)}
         onSubmit={(sel)=>{ onAddPto(addFor, sel); setAddFor(null); showToast && showToast("PTO added for " + addFor.name); }} />}
 

@@ -377,7 +377,7 @@ function ManagerView({ manager, employees, entries, upsertEntry, manualLocks, ma
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("h2", { style: { marginTop: 0 } }, "Enter hours for staff"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Pick whose hours you're entering, then fill their days below. Switching keeps each person separate."), /* @__PURE__ */ React.createElement("div", { className: "manager-picker" }, managed.map((e) => /* @__PURE__ */ React.createElement("button", { key: e.id, className: "btn " + (sel && e.id === sel.id ? "btn-primary" : "btn-ghost"), onClick: () => setSelId(e.id) }, e.name)))), sel && /* @__PURE__ */ React.createElement(EntryView, { key: sel.id, emp: sel, entries, upsertEntry, certs: {}, certifyPeriod: () => {
   }, manualLocks, manualUnlocks, showToast }));
 }
-function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel }) {
+function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel, allowPast }) {
   const todayStr = todayISO();
   const t0 = parseDate(todayStr);
   const [calY, setCalY] = useState(t0.getFullYear());
@@ -420,7 +420,7 @@ function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel })
       setCalY(calY + 1);
     } else setCalM(calM + 1);
   };
-  return /* @__PURE__ */ React.createElement("div", { className: "modal-backdrop", onClick: onClose }, /* @__PURE__ */ React.createElement("div", { className: "modal pto-modal", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { className: "pto-head" }, /* @__PURE__ */ React.createElement("h3", null, "Request PTO"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: { padding: "4px 10px" }, onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { className: "pto-counter" }, /* @__PURE__ */ React.createElement("strong", null, remaining), " of ", allow, " day", allow === 1 ? "" : "s", " left", requestedDays > 0 ? /* @__PURE__ */ React.createElement("span", null, " \xB7 ", requestedDays, " requested") : null, selDays > 0 ? /* @__PURE__ */ React.createElement("span", null, " \xB7 selecting ", selDays) : null), /* @__PURE__ */ React.createElement("div", { className: "pto-monthnav" }, /* @__PURE__ */ React.createElement("button", { onClick: prevM, "aria-label": "Previous month" }, "\u2039"), /* @__PURE__ */ React.createElement("span", null, monthName), /* @__PURE__ */ React.createElement("button", { onClick: nextM, "aria-label": "Next month" }, "\u203A")), /* @__PURE__ */ React.createElement("div", { className: "pto-grid" }, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => /* @__PURE__ */ React.createElement("div", { key: "dow" + i, className: "pto-dow" }, d[0])), cells.map((dt, i) => {
+  return /* @__PURE__ */ React.createElement("div", { className: "modal-backdrop", onClick: onClose }, /* @__PURE__ */ React.createElement("div", { className: "modal pto-modal", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { className: "pto-head" }, /* @__PURE__ */ React.createElement("h3", null, allowPast ? "Enter PTO" : "Request PTO"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: { padding: "4px 10px" }, onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { className: "pto-counter" }, /* @__PURE__ */ React.createElement("strong", null, remaining), " of ", allow, " day", allow === 1 ? "" : "s", " left", requestedDays > 0 ? /* @__PURE__ */ React.createElement("span", null, " \xB7 ", requestedDays, " requested") : null, selDays > 0 ? /* @__PURE__ */ React.createElement("span", null, " \xB7 selecting ", selDays) : null), /* @__PURE__ */ React.createElement("div", { className: "pto-monthnav" }, /* @__PURE__ */ React.createElement("button", { onClick: prevM, "aria-label": "Previous month" }, "\u2039"), /* @__PURE__ */ React.createElement("span", null, monthName), /* @__PURE__ */ React.createElement("button", { onClick: nextM, "aria-label": "Next month" }, "\u203A")), /* @__PURE__ */ React.createElement("div", { className: "pto-grid" }, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => /* @__PURE__ */ React.createElement("div", { key: "dow" + i, className: "pto-dow" }, d[0])), cells.map((dt, i) => {
     if (!dt) return /* @__PURE__ */ React.createElement("div", { key: "b" + i, className: "pto-cell blank" });
     const ds = localISO(dt);
     const dow = dt.getDay();
@@ -428,12 +428,12 @@ function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel })
     const past = ds < todayStr;
     const ex = byDate[ds];
     const ss = sel[ds];
-    const hardLocked = weekend || past || ex && ex.status === "approved";
+    const hardLocked = weekend || past && !allowPast || ex && ex.status === "approved";
     let cls = "pto-cell";
     if (ex && ex.status === "approved") cls += " approved";
     else if (ex && ex.status === "requested") cls += " requested";
     else if (ss) cls += ss.half ? " sel half" : " sel";
-    else if (weekend || past) cls += " muted";
+    else if (weekend || past && !allowPast) cls += " muted";
     return /* @__PURE__ */ React.createElement("div", { key: ds, className: cls, onClick: () => {
       if (hardLocked) return;
       if (ex && ex.status === "requested") {
@@ -467,6 +467,7 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
       pto: allPto.filter((r) => r.empId === addFor.id),
       allowance: addFor.ptoDays,
       startDate: addFor.startDate,
+      allowPast: true,
       onClose: () => setAddFor(null),
       onSubmit: (sel) => {
         onAddPto(addFor, sel);
