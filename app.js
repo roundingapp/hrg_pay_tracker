@@ -240,6 +240,13 @@ async function loadAllPto() {
     return [];
   }
 }
+async function loadPtoAdmin() {
+  const v = await sGet("ptoAdmin", {});
+  return v && typeof v === "object" ? v : {};
+}
+async function savePtoAdmin(map) {
+  return await sSet("ptoAdmin", map);
+}
 const SALARY_DOC = "salaries";
 async function loadSalaries() {
   try {
@@ -475,7 +482,13 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
         showToast && showToast("PTO added for " + addFor.name);
       }
     }
-  ), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, Object.keys(groups).length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "empty" }, "No pending PTO requests.") : Object.entries(groups).map(([empId, recs]) => {
+  ), (() => {
+    const adminRecs = (allPto || []).filter((r) => r._admin).slice().sort((a, b) => a.date.localeCompare(b.date));
+    if (!adminRecs.length) return null;
+    const byEmp = {};
+    for (const r of adminRecs) (byEmp[r.empId] = byEmp[r.empId] || []).push(r);
+    return /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("label", null, "Recorded by admin"), Object.entries(byEmp).map(([empId, recs]) => /* @__PURE__ */ React.createElement("div", { className: "pto-group", key: "adm" + empId }, /* @__PURE__ */ React.createElement("div", { className: "pto-group-head" }, /* @__PURE__ */ React.createElement("strong", null, nameOf(empId)), /* @__PURE__ */ React.createElement("span", { className: "pto-group-count" }, recs.reduce((s, r) => s + (r.half ? 0.5 : 1), 0), " day", recs.length === 1 && !recs[0].half ? "" : "s")), recs.map((r) => /* @__PURE__ */ React.createElement("div", { className: "pto-req", key: r.id }, /* @__PURE__ */ React.createElement("span", null, fmtShortYr(r.date), r.half ? " \xB7 \xBD day" : ""), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", style: { ...sm }, onClick: () => onSetStatus([{ _admin: true, empId: r.empId, id: r.id }], null) }, "Remove"))))));
+  })(), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, Object.keys(groups).length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "empty" }, "No pending PTO requests.") : Object.entries(groups).map(([empId, recs]) => {
     const dc = recs.reduce((s, r) => s + (r.half ? 0.5 : 1), 0);
     const items = recs.map((r) => ({ _uid: r._uid, id: r.id }));
     return /* @__PURE__ */ React.createElement("div", { className: "pto-group", key: empId }, /* @__PURE__ */ React.createElement("div", { className: "pto-group-head" }, /* @__PURE__ */ React.createElement("strong", null, nameOf(empId)), /* @__PURE__ */ React.createElement("span", { className: "pto-group-count" }, dc, " day", dc === 1 ? "" : "s", " requested"), /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", whiteSpace: "nowrap" } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: sm, onClick: () => onSetStatus(items, "approved") }, "Approve all"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", style: { ...sm, marginLeft: 8 }, onClick: () => onSetStatus(items, null) }, "Deny all"))), recs.map((r) => {
@@ -498,6 +511,7 @@ function App() {
   const [myAdj, setMyAdj] = useState({});
   const [pto, setPto] = useState([]);
   const [allPto, setAllPto] = useState([]);
+  const [ptoAdmin, setPtoAdmin] = useState({});
   const [impersonate, setImpersonate] = useState(null);
   const [impersonateDoc, setImpersonateDoc] = useState(null);
   const [impersonateCerts, setImpersonateCerts] = useState({});
@@ -510,6 +524,9 @@ function App() {
     const ae = String(authUser.email || "").toLowerCase();
     return String(e.email || "").trim().toLowerCase() === ae && ae || npEmailFor(e.username) === ae;
   }) : null;
+  const adminPtoFlat = Object.entries(ptoAdmin || {}).flatMap(([empId, list]) => (Array.isArray(list) ? list : []).map((r) => ({ ...r, empId, _admin: true })));
+  const allPtoMerged = [...allPto, ...adminPtoFlat];
+  const myPtoMerged = [...pto, ...myEmp ? adminPtoFlat.filter((r) => r.empId === myEmp.id) : []];
   const showToast = useCallback((msg) => {
     setToast(msg);
     setTimeout(() => setToast(""), 2200);
@@ -528,7 +545,7 @@ function App() {
     refreshBusy.current = true;
     try {
       const owner = isOwnerUser(u);
-      const [emps, locks, unlocks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2, myPto, everyPto] = await Promise.all([
+      const [emps, locks, unlocks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2, myPto, everyPto, adminPto] = await Promise.all([
         sGet("employees", null),
         sGet("manualLocks", []),
         sGet("manualUnlocks", []),
@@ -540,8 +557,10 @@ function App() {
         owner ? Promise.resolve({}) : loadMyAdj(u.uid),
         loadPto(u.uid),
         // the user's own PTO (owner has one too)
-        owner ? loadAllPto() : Promise.resolve([])
+        owner ? loadAllPto() : Promise.resolve([]),
         // owner: everyone's PTO
+        loadPtoAdmin()
+        // admin-entered PTO (staff-readable)
       ]);
       const setIfChanged = (setter, next) => setter((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
       setIfChanged(setEmployees, emps && emps.length ? emps : []);
@@ -555,6 +574,7 @@ function App() {
       setIfChanged(setMyAdj, myAdj2);
       setIfChanged(setPto, Array.isArray(myPto) ? myPto : []);
       setIfChanged(setAllPto, Array.isArray(everyPto) ? everyPto : []);
+      setIfChanged(setPtoAdmin, adminPto && typeof adminPto === "object" ? adminPto : {});
       setSyncedAt(/* @__PURE__ */ new Date());
     } finally {
       refreshBusy.current = false;
@@ -630,27 +650,45 @@ function App() {
     }
   }, [entries]);
   const setPtoStatus = useCallback(async (items, newStatus) => {
+    const adminItems = items.filter((it) => it._admin);
+    const regItems = items.filter((it) => !it._admin);
     const byUid = {};
-    for (const it of items) (byUid[it._uid] = byUid[it._uid] || []).push(it.id);
+    for (const it of regItems) (byUid[it._uid] = byUid[it._uid] || []).push(it.id);
     const now = (/* @__PURE__ */ new Date()).toISOString();
+    const approvedRecs = [];
     for (const [docId, ids] of Object.entries(byUid)) {
       const latest = await loadPto(docId);
       const next = newStatus === null ? latest.filter((r) => !ids.includes(r.id)) : latest.map((r) => ids.includes(r.id) ? { ...r, status: newStatus, approvedAt: now } : r);
+      if (newStatus === "approved") approvedRecs.push(...latest.filter((r) => ids.includes(r.id)));
       await savePto(docId, next);
+    }
+    if (adminItems.length || approvedRecs.length) {
+      const map = await loadPtoAdmin();
+      for (const it of adminItems)
+        map[it.empId] = (map[it.empId] || []).filter((r) => r.id !== it.id);
+      for (const r of approvedRecs)
+        if (map[r.empId]) map[r.empId] = map[r.empId].filter((a) => a.date !== r.date);
+      for (const k of Object.keys(map)) if (!map[k] || !map[k].length) delete map[k];
+      await savePtoAdmin(map);
+      setPtoAdmin(await loadPtoAdmin());
     }
     setAllPto(await loadAllPto());
   }, []);
   const addPtoForEmployee = useCallback(async (emp, sel) => {
     if (!emp) return;
-    const docId = (allPto.find((r) => r.empId === emp.id) || {})._uid || (entries.find((e) => e.empId === emp.id) || {})._uid || emp.id;
     const now = (/* @__PURE__ */ new Date()).toISOString();
-    const latest = await loadPto(docId);
-    const taken = new Set(latest.map((r) => r.date));
+    const map = await loadPtoAdmin();
+    const list = Array.isArray(map[emp.id]) ? map[emp.id] : [];
+    const taken = /* @__PURE__ */ new Set([
+      ...list.map((r) => r.date),
+      ...allPto.filter((r) => r.empId === emp.id).map((r) => r.date)
+    ]);
     const fresh = Object.entries(sel || {}).filter(([date]) => !taken.has(date)).map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2, 6), empId: emp.id, date, half: !!(v && v.half), status: "approved", approvedAt: now, by: "admin" }));
     if (!fresh.length) return;
-    await savePto(docId, [...latest, ...fresh]);
-    setAllPto(await loadAllPto());
-  }, [allPto, entries]);
+    map[emp.id] = [...list, ...fresh];
+    await savePtoAdmin(map);
+    setPtoAdmin(await loadPtoAdmin());
+  }, [allPto]);
   const setPeriodLock = useCallback(async (periodIndex, shouldLock) => {
     const curLocks = new Set(await sGet("manualLocks", []) || []);
     const curUnlocks = new Set(await sGet("manualUnlocks", []) || []);
@@ -822,7 +860,7 @@ function App() {
         for (const [p, byEmp] of Object.entries(adjustments || {})) if (byEmp && byEmp[impersonate.id]) o[p] = byEmp[impersonate.id];
         return o;
       })(),
-      pto: allPto.filter((r) => r.empId === impersonate.id),
+      pto: allPtoMerged.filter((r) => r.empId === impersonate.id),
       ptoAllowance: impersonate.ptoDays,
       ptoStartDate: impersonate.startDate,
       onRequestPto: ptoEligible(impersonate) ? requestPtoForImpersonated : void 0,
@@ -843,7 +881,7 @@ function App() {
       persistSalaries,
       persistAdjustments,
       deleteEntry: deleteOwnerEntry,
-      allPto,
+      allPto: allPtoMerged,
       onSetPtoStatus: setPtoStatus,
       onAddPto: addPtoForEmployee,
       onViewAs: startImpersonate,
@@ -863,7 +901,7 @@ function App() {
       manualUnlocks,
       baseSalary: mySalary,
       empAdj: myAdj,
-      pto,
+      pto: myPtoMerged,
       ptoAllowance: myEmp && myEmp.ptoDays,
       ptoStartDate: myEmp && myEmp.startDate,
       onRequestPto: ptoEligible(myEmp) ? requestPto : void 0,

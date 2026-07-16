@@ -236,6 +236,14 @@ async function loadAllPto() {
     return all;
   } catch (e) { console.error("all-pto read failed", e); return []; }
 }
+/* ---------- admin-entered PTO (paytracker/ptoAdmin, ONE doc for everyone) ----------
+   Shape: { value: { [empId]: [ {id, empId, date, half, status:"approved", by, approvedAt} ] } }
+   Keyed by EMPLOYEE id (exists from the roster), not auth uid — so the owner can record
+   time off for someone who has never logged in, and it shows up for them the moment they
+   do. Lives in the "paytracker" collection: staff-readable, owner-writable — no rules
+   change. Merged with the per-uid self-requested docs everywhere PTO is displayed/counted. */
+async function loadPtoAdmin() { const v = await sGet("ptoAdmin", {}); return v && typeof v === "object" ? v : {}; }
+async function savePtoAdmin(map) { return await sSet("ptoAdmin", map); }
 // Annual salaries (owner-only): stored at paytracker_entries/<SALARY_DOC>. The existing rule on
 // that collection is `isOwner() || auth.uid == docId` — and no staff account's uid can equal the
 // literal "salaries", so this doc is owner-only with no rules change. Shape: { value: {empId: annual} }.
@@ -492,6 +500,30 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
         onClose={()=>setAddFor(null)}
         onSubmit={(sel)=>{ onAddPto(addFor, sel); setAddFor(null); showToast && showToast("PTO added for " + addFor.name); }} />}
 
+      {(() => {   // days recorded by the admin (born approved) — removable here if mis-entered
+        const adminRecs = (allPto || []).filter(r => r._admin).slice().sort((a,b) => a.date.localeCompare(b.date));
+        if (!adminRecs.length) return null;
+        const byEmp = {};
+        for (const r of adminRecs) (byEmp[r.empId] = byEmp[r.empId] || []).push(r);
+        return (
+          <div className="emp-section">
+            <label>Recorded by admin</label>
+            {Object.entries(byEmp).map(([empId, recs]) => (
+              <div className="pto-group" key={"adm"+empId}>
+                <div className="pto-group-head"><strong>{nameOf(empId)}</strong>
+                  <span className="pto-group-count">{recs.reduce((s,r)=>s+(r.half?0.5:1),0)} day{recs.length===1&&!recs[0].half?"":"s"}</span></div>
+                {recs.map(r => (
+                  <div className="pto-req" key={r.id}>
+                    <span>{fmtShortYr(r.date)}{r.half ? " · ½ day" : ""}</span>
+                    <button className="btn btn-danger" style={{...sm}} onClick={()=>onSetStatus([{_admin:true, empId:r.empId, id:r.id}], null)}>Remove</button>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
       <div className="emp-section">
         {Object.keys(groups).length === 0
           ? <div className="empty">No pending PTO requests.</div>
@@ -542,6 +574,7 @@ function App() {
   const [myAdj, setMyAdj] = useState({});         // the signed-in NP's own bonus/reimbursement by period
   const [pto, setPto] = useState([]);             // the signed-in user's own PTO records
   const [allPto, setAllPto] = useState([]);       // owner: everyone's PTO (for the approval tab)
+  const [ptoAdmin, setPtoAdmin] = useState({});   // admin-entered PTO by empId (staff-readable)
   const [impersonate, setImpersonate] = useState(null);       // owner "view as" target employee (or null)
   const [impersonateDoc, setImpersonateDoc] = useState(null); // the entries doc that employee's data lives in
   const [impersonateCerts, setImpersonateCerts] = useState({});
@@ -558,6 +591,12 @@ function App() {
         return (String(e.email||"").trim().toLowerCase() === ae && ae) || npEmailFor(e.username) === ae;
       })
     : null;
+  // PTO shown/counted anywhere = the person's own requests (per-uid doc) + admin-entered
+  // days (paytracker/ptoAdmin, keyed by empId — works even if they've never logged in)
+  const adminPtoFlat = Object.entries(ptoAdmin || {}).flatMap(([empId, list]) =>
+    (Array.isArray(list) ? list : []).map(r => ({ ...r, empId, _admin: true })));
+  const allPtoMerged = [...allPto, ...adminPtoFlat];
+  const myPtoMerged = [...pto, ...(myEmp ? adminPtoFlat.filter(r => r.empId === myEmp.id) : [])];
 
   const showToast = useCallback((msg) => {
     setToast(msg);
@@ -574,7 +613,7 @@ function App() {
     try {
       const owner = isOwnerUser(u);
       // fire every read at once (they're independent) — was 8 sequential round-trips
-      const [emps, locks, unlocks, entries, certs, salaries, mySalary, adjustments, myAdj, myPto, everyPto] = await Promise.all([
+      const [emps, locks, unlocks, entries, certs, salaries, mySalary, adjustments, myAdj, myPto, everyPto, adminPto] = await Promise.all([
         sGet("employees", null),
         sGet("manualLocks", []),
         sGet("manualUnlocks", []),
@@ -586,6 +625,7 @@ function App() {
         owner ? Promise.resolve({}) : loadMyAdj(u.uid),
         loadPto(u.uid),                                  // the user's own PTO (owner has one too)
         owner ? loadAllPto() : Promise.resolve([]),      // owner: everyone's PTO
+        loadPtoAdmin(),                                  // admin-entered PTO (staff-readable)
       ]);
       // only touch state that actually changed — an unchanged pull must not re-render, because
       // browsers close/reset an open <select> (the View-as picker) when its options are rebuilt
@@ -601,6 +641,7 @@ function App() {
       setIfChanged(setMyAdj, myAdj);
       setIfChanged(setPto, Array.isArray(myPto) ? myPto : []);
       setIfChanged(setAllPto, Array.isArray(everyPto) ? everyPto : []);
+      setIfChanged(setPtoAdmin, adminPto && typeof adminPto === "object" ? adminPto : {});
       setSyncedAt(new Date());     // mark data as freshly pulled
     } finally { refreshBusy.current = false; }
   }, []);
@@ -670,35 +711,57 @@ function App() {
       if (docId) await saveMyAdj(docId, perPeriod);
     }
   }, [entries]);
-  // owner approves (status→approved) or denies (removes) PTO requests; items = [{_uid, id}]
+  // owner approves (status→approved) or denies (removes) PTO requests.
+  // items = [{_uid, id}] for self-requested records, [{_admin:true, empId, id}] for admin-entered.
   const setPtoStatus = useCallback(async (items, newStatus) => {
+    const adminItems = items.filter(it => it._admin);
+    const regItems = items.filter(it => !it._admin);
     const byUid = {};
-    for (const it of items) (byUid[it._uid] = byUid[it._uid] || []).push(it.id);
+    for (const it of regItems) (byUid[it._uid] = byUid[it._uid] || []).push(it.id);
     const now = new Date().toISOString();
+    const approvedRecs = [];   // (empId, date) of newly approved — to dedupe vs admin-entered
     for (const [docId, ids] of Object.entries(byUid)) {
       const latest = await loadPto(docId);
       const next = newStatus === null
         ? latest.filter(r => !ids.includes(r.id))                                                   // deny = remove
         : latest.map(r => ids.includes(r.id) ? { ...r, status: newStatus, approvedAt: now } : r);   // approve
+      if (newStatus === "approved") approvedRecs.push(...latest.filter(r => ids.includes(r.id)));
       await savePto(docId, next);
+    }
+    // admin-entered records can only be removed (they're born approved)
+    if (adminItems.length || approvedRecs.length) {
+      const map = await loadPtoAdmin();
+      for (const it of adminItems)
+        map[it.empId] = (map[it.empId] || []).filter(r => r.id !== it.id);
+      // if a self-request just got approved for a day the admin had also entered, drop the
+      // admin copy so the day isn't counted twice
+      for (const r of approvedRecs)
+        if (map[r.empId]) map[r.empId] = map[r.empId].filter(a => a.date !== r.date);
+      for (const k of Object.keys(map)) if (!map[k] || !map[k].length) delete map[k];
+      await savePtoAdmin(map);
+      setPtoAdmin(await loadPtoAdmin());
     }
     setAllPto(await loadAllPto());
   }, []);
-  // owner enters PTO for someone (added directly as approved) — writes to THEIR pto doc
+  // owner enters PTO for someone (added directly as approved) — goes to the admin-entered
+  // doc keyed by EMPLOYEE id, so it works whether or not the person has ever logged in and
+  // is readable by them the moment they do.
   const addPtoForEmployee = useCallback(async (emp, sel) => {
     if (!emp) return;
-    const docId = (allPto.find(r => r.empId === emp.id) || {})._uid
-      || (entries.find(e => e.empId === emp.id) || {})._uid || emp.id;
     const now = new Date().toISOString();
-    const latest = await loadPto(docId);
-    const taken = new Set(latest.map(r => r.date));
+    const map = await loadPtoAdmin();
+    const list = Array.isArray(map[emp.id]) ? map[emp.id] : [];
+    // dedupe against both stores: their own requests/approvals AND prior admin entries
+    const taken = new Set([...list.map(r => r.date),
+                           ...allPto.filter(r => r.empId === emp.id).map(r => r.date)]);
     const fresh = Object.entries(sel || {})
       .filter(([date]) => !taken.has(date))
       .map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2,6), empId: emp.id, date, half: !!(v && v.half), status: "approved", approvedAt: now, by: "admin" }));
     if (!fresh.length) return;
-    await savePto(docId, [...latest, ...fresh]);
-    setAllPto(await loadAllPto());
-  }, [allPto, entries]);
+    map[emp.id] = [...list, ...fresh];
+    await savePtoAdmin(map);
+    setPtoAdmin(await loadPtoAdmin());
+  }, [allPto]);
   // admin sets a period's lock state explicitly. shouldLock=true → force-locked; false → force-unlocked
   // (overrides the 72h auto-lock). The two lists are kept mutually exclusive.
   const setPeriodLock = useCallback(async (periodIndex, shouldLock) => {
@@ -872,7 +935,7 @@ function App() {
                 certs={impersonateCerts} certifyPeriod={certifyForImpersonated} manualLocks={manualLocks} manualUnlocks={manualUnlocks}
                 audit={true} baseSalary={salaries[impersonate.id]}
                 empAdj={(() => { const o = {}; for (const [p, byEmp] of Object.entries(adjustments||{})) if (byEmp && byEmp[impersonate.id]) o[p] = byEmp[impersonate.id]; return o; })()}
-                pto={allPto.filter(r => r.empId === impersonate.id)} ptoAllowance={impersonate.ptoDays} ptoStartDate={impersonate.startDate}
+                pto={allPtoMerged.filter(r => r.empId === impersonate.id)} ptoAllowance={impersonate.ptoDays} ptoStartDate={impersonate.startDate}
                 onRequestPto={ptoEligible(impersonate) ? requestPtoForImpersonated : undefined}
                 onCancelPto={ptoEligible(impersonate) ? cancelPtoForImpersonated : undefined}
                 showToast={showToast} />}
@@ -883,7 +946,7 @@ function App() {
       {isOwner && !impersonate && (
         <OwnerView employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} manualLocks={manualLocks} manualUnlocks={manualUnlocks} setPeriodLock={setPeriodLock}
           persistEmployees={persistEmployees} persistSalaries={persistSalaries} persistAdjustments={persistAdjustments} deleteEntry={deleteOwnerEntry}
-          allPto={allPto} onSetPtoStatus={setPtoStatus} onAddPto={addPtoForEmployee}
+          allPto={allPtoMerged} onSetPtoStatus={setPtoStatus} onAddPto={addPtoForEmployee}
           onViewAs={startImpersonate} syncedAt={syncedAt} onRefresh={refresh} showToast={showToast} />
       )}
 
@@ -896,7 +959,7 @@ function App() {
             : myEmp.managedBy
               ? <div className="card"><div className="empty">Your hours are entered for you — there's nothing to log here. Reach out to the office if something looks off.</div></div>
               : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} manualUnlocks={manualUnlocks} baseSalary={mySalary} empAdj={myAdj}
-                  pto={pto} ptoAllowance={myEmp && myEmp.ptoDays} ptoStartDate={myEmp && myEmp.startDate}
+                  pto={myPtoMerged} ptoAllowance={myEmp && myEmp.ptoDays} ptoStartDate={myEmp && myEmp.startDate}
                   onRequestPto={ptoEligible(myEmp) ? requestPto : undefined}
                   onCancelPto={ptoEligible(myEmp) ? cancelPto : undefined}
                   showToast={showToast} />
