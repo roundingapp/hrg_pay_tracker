@@ -23,8 +23,9 @@ const ALL_TYPES = [...FIXED, ...VARIABLE];
 // Employee-entered "Other" one-off amounts are deactivated (abuse vector). All Other logic stays
 // wired (build/save/load/totals) and the roll-up Other column remains — flip to true to re-enable.
 const OTHER_ENABLED = false;
-// PTO feature: gated to a test set for now. Flip PTO_ENABLED=true to turn it on for all staff.
-const PTO_ENABLED = false;
+// PTO feature: ON for all staff who have a PTO allowance (ptoDays>0). PTO_TEST_USERS is a
+// legacy override that force-shows it for a username even without the global flag.
+const PTO_ENABLED = true;
 const PTO_TEST_USERS = new Set(["nsutaria"]);
 const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username||"").trim().toLowerCase());
 // a person sees PTO only if the feature is on for them AND they actually have a PTO allowance (>0)

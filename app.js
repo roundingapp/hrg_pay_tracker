@@ -16,7 +16,7 @@ const VARIABLE = [
 ];
 const ALL_TYPES = [...FIXED, ...VARIABLE];
 const OTHER_ENABLED = false;
-const PTO_ENABLED = false;
+const PTO_ENABLED = true;
 const PTO_TEST_USERS = /* @__PURE__ */ new Set(["nsutaria"]);
 const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username || "").trim().toLowerCase());
 const ptoEligible = (emp) => !!emp && ptoVisibleFor(emp.username) && Number(emp.ptoDays) > 0;
