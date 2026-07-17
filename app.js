@@ -651,22 +651,28 @@ function App() {
     if (!isOwner || healedRef.current) return;
     if (!entries.length && !Object.keys(salaries || {}).length) return;
     healedRef.current = true;
+    const uidOf = (empId) => {
+      const viaReg = resolveUidForEmp(empId, entries);
+      if (viaReg && !String(viaReg).startsWith("emp_")) return viaReg;
+      const viaPto = (allPto.find((r) => r.empId === empId && r._uid && !String(r._uid).startsWith("emp_")) || {})._uid;
+      return viaPto || null;
+    };
     (async () => {
       for (const [empId, annual] of Object.entries(salaries || {})) {
-        const docId = resolveUidForEmp(empId, entries);
-        if (docId && !String(docId).startsWith("emp_")) await saveMySalary(docId, annual);
+        const docId = uidOf(empId);
+        if (docId) await saveMySalary(docId, annual);
       }
       const byEmp = {};
       for (const [pIdx, perEmp] of Object.entries(adjustments || {}))
         for (const [empId, a] of Object.entries(perEmp || {}))
           (byEmp[empId] = byEmp[empId] || {})[pIdx] = { bonus: Number(a.bonus) || 0, reimbursement: Number(a.reimbursement) || 0 };
       for (const [empId, perPeriod] of Object.entries(byEmp)) {
-        const docId = resolveUidForEmp(empId, entries);
-        if (docId && !String(docId).startsWith("emp_")) await saveMyAdj(docId, perPeriod);
+        const docId = uidOf(empId);
+        if (docId) await saveMyAdj(docId, perPeriod);
       }
     })().catch(() => {
     });
-  }, [isOwner, entries, salaries, adjustments]);
+  }, [isOwner, entries, salaries, adjustments, allPto]);
   const persistEmployees = useCallback(async (next) => {
     setEmployees(next);
     await sSet("employees", next);
