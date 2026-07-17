@@ -471,7 +471,8 @@ function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel, a
 function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
   const [addFor, setAddFor] = useState(null);
   const nameOf = (empId) => { const e = employees.find(x => x.id === empId); return e ? lastFirst(e.name) : empId; };
-  const sortedEmps = employees.filter(e => !e.salaryOnly).slice().sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
+  // salary-only staff don't log pay, but they DO take PTO — include anyone with an allowance
+  const sortedEmps = employees.filter(e => !e.salaryOnly || Number(e.ptoDays) > 0).slice().sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
   const sm = { padding: "5px 11px", fontSize: 13 };
 
   const pending = (allPto || []).filter(r => r.status === "requested").slice().sort((a,b) => a.date.localeCompare(b.date));
@@ -1217,6 +1218,9 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     const r = emp.rates?.[t.key];
     return r != null && Number(r) > 0;
   }) : [];
+  // salary-only view: no counted pay types (and no Other entry) = nothing to log day-to-day.
+  // Hide the logging UI entirely — show pay breakdown, payday, and PTO only.
+  const noPayTypes = !!emp && visibleTypes.length === 0 && !OTHER_ENABLED;
 
   // typing: keep the raw text so the field can be emptied and hold decimals (e.g. "7.5") while editing
   const typeCount = (key, raw) => {
@@ -1279,8 +1283,10 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
         onClose={()=>setPtoOpen(false)}
         onCancel={(date)=>{ onCancelPto && onCancelPto(date); showToast && showToast("PTO request canceled"); }}
         onSubmit={(sel)=>{ onRequestPto(sel); setPtoOpen(false); showToast && showToast("PTO request submitted"); }} />}
-      <h2>Log your work</h2>
-      <p className="hint">Logging as <strong>{emp.name}</strong> (@{normU(emp.username)}). Tap a day below to add or edit it.</p>
+      <h2>{noPayTypes ? "Your pay" : "Log your work"}</h2>
+      <p className="hint">{noPayTypes
+        ? <>Signed in as <strong>{emp.name}</strong>{normU(emp.username) ? <> (@{normU(emp.username)})</> : null}. You're salaried — there's nothing to log day-to-day.</>
+        : <>Logging as <strong>{emp.name}</strong> (@{normU(emp.username)}). Tap a day below to add or edit it.</>}</p>
       {ptoEnabled && (
         <div className="pto-line">
           {approvedPto.length > 0 && <div className="pto-status">Approved PTO: {ptoFmt(approvedPto)}</div>}
@@ -1302,7 +1308,10 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
               {(baseBiweekly > 0 || periodBonus > 0 || periodReimb > 0)
                 ? <div className="pay-breakdown">
                     <div><span>Base</span><span className="pay">{money(baseBiweekly)}</span></div>
-                    <div><span>Variable</span><span className="pay">{money(periodDollars)}</span></div>
+                    {/* salary-only staff have no variable pay — don't show a dead $0.00 row
+                        (still shown if a legacy period has real logged dollars) */}
+                    {(!noPayTypes || periodDollars > 0) &&
+                      <div><span>Variable</span><span className="pay">{money(periodDollars)}</span></div>}
                     {periodBonus > 0 && <div><span>Bonus</span><span className="pay">{money(periodBonus)}</span></div>}
                     {periodReimb > 0 && <div><span>Reimbursement</span><span className="pay">{money(periodReimb)}</span></div>}
                     <div className="pay-total"><span>Total</span><span className="pay">{money(baseBiweekly + periodDollars + periodBonus + periodReimb)}</span></div>
@@ -1311,6 +1320,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
               <div style={{fontSize:12, color:"var(--muted)", marginTop:4}}>Payday {period.paydayLabel}</div>
             </div>
           </div>
+          {!noPayTypes && <>
           <div style={{height:12}} />
           <div className="week-grid">
             {DOW.map(d => <div className="dow" key={"dow-"+d}>{d}</div>)}
@@ -1340,6 +1350,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
               Heads up: {fmtShortYr(date)} is in a pay period that's already locked for payroll. You can still save, but the owner will be notified it came in late.
             </div>
           )}
+          </>}
         </>
       )}
 
@@ -1412,13 +1423,10 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
         </>
       )}
 
-      {emp && gateOpen && visibleTypes.length === 0 && (
-        <div className="fixed-note" style={{marginTop:18}}>
-          No counted pay types are set up for {emp.name} yet{OTHER_ENABLED ? " — you can still log an Other amount below" : ""} — ask the owner to set your rates.
-        </div>
-      )}
+      {/* ("no counted pay types" nag removed — people with no pay types get the salary-only
+          view above; if OTHER_ENABLED is ever flipped back on they get the Other box below) */}
 
-      {emp && gateOpen && (
+      {emp && gateOpen && !noPayTypes && (
         <>
           {OTHER_ENABLED && (<>
           <div style={{height:18}} />
