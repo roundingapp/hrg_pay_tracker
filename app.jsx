@@ -491,10 +491,6 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
   const sortedEmps = employees.filter(e => !e.salaryOnly || Number(e.ptoDays) > 0).slice().sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
   const sm = { padding: "5px 11px", fontSize: 13 };
 
-  const pending = (allPto || []).filter(r => r.status === "requested").slice().sort((a,b) => a.date.localeCompare(b.date));
-  const groups = {};
-  for (const r of pending) (groups[r.empId] = groups[r.empId] || []).push(r);
-
   // who's off (requested or approved) by date → overlap detection
   const byDate = {};
   for (const r of (allPto || [])) if (r.status === "requested" || r.status === "approved") (byDate[r.date] = byDate[r.date] || []).push(r);
@@ -517,61 +513,73 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
         onClose={()=>setAddFor(null)}
         onSubmit={(sel)=>{ onAddPto(addFor, sel); setAddFor(null); showToast && showToast("PTO added for " + addFor.name); }} />}
 
-      {(() => {   // days recorded by the admin (born approved) — removable here if mis-entered
-        const adminRecs = (allPto || []).filter(r => r._admin).slice().sort((a,b) => a.date.localeCompare(b.date));
-        if (!adminRecs.length) return null;
-        const byEmp = {};
-        for (const r of adminRecs) (byEmp[r.empId] = byEmp[r.empId] || []).push(r);
-        return (
-          <div className="emp-section">
-            <label>Recorded by admin</label>
-            {Object.entries(byEmp).map(([empId, recs]) => (
-              <div className="pto-group" key={"adm"+empId}>
-                <div className="pto-group-head"><strong>{nameOf(empId)}</strong>
-                  <span className="pto-group-count">{recs.reduce((s,r)=>s+(r.half?0.5:1),0)} day{recs.length===1&&!recs[0].half?"":"s"}</span></div>
-                {recs.map(r => (
-                  <div className="pto-req" key={r.id}>
-                    <span>{fmtShortYr(r.date)}{r.half ? " · ½ day" : ""}</span>
-                    <button className="btn btn-danger" style={{...sm}} onClick={()=>onSetStatus([{_admin:true, empId:r.empId, id:r.id}], null)}>Remove</button>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        );
-      })()}
-
+      {/* ---- the ENTIRE PTO picture, per employee: allowance, used, pending, remaining,
+              and every day (self-requested AND admin-entered) with inline actions ---- */}
       <div className="emp-section">
-        {Object.keys(groups).length === 0
-          ? <div className="empty">No pending PTO requests.</div>
-          : Object.entries(groups).map(([empId, recs]) => {
-              const dc = recs.reduce((s,r) => s + (r.half ? 0.5 : 1), 0);
-              const items = recs.map(r => ({ _uid: r._uid, id: r.id }));
-              return (
-                <div className="pto-group" key={empId}>
-                  <div className="pto-group-head">
-                    <strong>{nameOf(empId)}</strong>
-                    <span className="pto-group-count">{dc} day{dc===1?"":"s"} requested</span>
+        <label>PTO by employee</label>
+        {(() => {
+          const withPto = employees
+            .filter(e => Number(e.ptoDays) > 0 || (allPto || []).some(r => r.empId === e.id))
+            .sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
+          if (!withPto.length) return <div className="empty">No PTO allowances or records yet.</div>;
+          return withPto.map(e => {
+            const recs = (allPto || []).filter(r => r.empId === e.id)
+              .slice().sort((a,b) => a.date.localeCompare(b.date));
+            // PTO year window: anniversary if a start date is set, else calendar year
+            const yStart = ptoYearStartDate(e.startDate);
+            const wStart = yStart ? localISO(yStart) : null;
+            const wEnd = yStart ? localISO(new Date(yStart.getFullYear()+1, yStart.getMonth(), yStart.getDate())) : null;
+            const inYear = (d) => wStart ? (d >= wStart && d < wEnd) : String(d||"").slice(0,4) === todayISO().slice(0,4);
+            const used = recs.filter(r => r.status === "approved" && inYear(r.date)).reduce((s,r) => s + ptoDayValue(r), 0);
+            const pend = recs.filter(r => r.status === "requested");
+            const pendDays = pend.reduce((s,r) => s + ptoDayValue(r), 0);
+            const allow = Number(e.ptoDays) || 0;
+            const left = Math.max(0, allow - used);
+            const pendItems = pend.map(r => ({ _uid: r._uid, id: r.id }));
+            return (
+              <div className="pto-group" key={"sum"+e.id}>
+                <div className="pto-group-head">
+                  <strong>{lastFirst(e.name)}</strong>
+                  <span className="pto-group-count">
+                    {allow > 0 ? `${used} used of ${allow} · ${left} left` : `${used} used (no allowance set)`}
+                    {pendDays > 0 ? ` · ${pendDays} pending` : ""}
+                  </span>
+                  {pend.length > 0 && (
                     <span style={{marginLeft:"auto", whiteSpace:"nowrap"}}>
-                      <button className="btn btn-ghost" style={sm} onClick={()=>onSetStatus(items, "approved")}>Approve all</button>
-                      <button className="btn btn-danger" style={{...sm, marginLeft:8}} onClick={()=>onSetStatus(items, null)}>Deny all</button>
+                      <button className="btn btn-ghost" style={sm} onClick={()=>onSetStatus(pendItems, "approved")}>Approve all</button>
+                      <button className="btn btn-danger" style={{...sm, marginLeft:8}} onClick={()=>onSetStatus(pendItems, null)}>Deny all</button>
                     </span>
-                  </div>
-                  {recs.map(r => {
-                    const ov = overlapsFor(r);
-                    return (
-                      <div className="pto-req" key={r.id}>
-                        <span>{fmtShortYr(r.date)}{r.half ? " · ½ day" : ""}{ov.length ? <span className="pto-overlap"> ⚠ also off: {ov.map(o=>nameOf(o.empId)).join(", ")}</span> : null}</span>
-                        <span style={{whiteSpace:"nowrap"}}>
-                          <button className="btn btn-ghost" style={sm} onClick={()=>onSetStatus([{_uid:r._uid,id:r.id}], "approved")}>Approve</button>
-                          <button className="btn btn-danger" style={{...sm, marginLeft:8}} onClick={()=>onSetStatus([{_uid:r._uid,id:r.id}], null)}>Deny</button>
-                        </span>
-                      </div>
-                    );
-                  })}
+                  )}
                 </div>
-              );
-            })}
+                {recs.length === 0 && <div className="pto-req"><span style={{color:"var(--muted)"}}>No days recorded.</span></div>}
+                {recs.map(r => {
+                  const ov = r.status === "requested" ? overlapsFor(r) : [];
+                  const item = r._admin ? { _admin: true, empId: r.empId, id: r.id } : { _uid: r._uid, id: r.id };
+                  return (
+                    <div className="pto-req" key={r.id}>
+                      <span>
+                        {fmtShortYr(r.date)}{r.half ? " · ½ day" : ""}
+                        <span style={{marginLeft:8, fontSize:12, color: r.status==="requested" ? "var(--amber)" : "var(--muted)"}}>
+                          {r.status === "requested" ? "requested" : r._admin ? "approved · admin-entered" : "approved"}
+                        </span>
+                        {!inYear(r.date) && r.status === "approved" ? <span style={{marginLeft:8, fontSize:12, color:"var(--faint)"}}>(outside current PTO year)</span> : null}
+                        {ov.length ? <span className="pto-overlap"> ⚠ also off: {ov.map(o=>nameOf(o.empId)).join(", ")}</span> : null}
+                      </span>
+                      <span style={{whiteSpace:"nowrap"}}>
+                        {r.status === "requested"
+                          ? <>
+                              <button className="btn btn-ghost" style={sm} onClick={()=>onSetStatus([item], "approved")}>Approve</button>
+                              <button className="btn btn-danger" style={{...sm, marginLeft:8}} onClick={()=>onSetStatus([item], null)}>Deny</button>
+                            </>
+                          : <button className="btn btn-danger" style={sm} onClick={()=>onSetStatus([item], null)}>Remove</button>}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          });
+        })()}
       </div>
     </div>
   );

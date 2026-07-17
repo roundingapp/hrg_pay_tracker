@@ -467,9 +467,6 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
   };
   const sortedEmps = employees.filter((e) => !e.salaryOnly || Number(e.ptoDays) > 0).slice().sort((a, b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
   const sm = { padding: "5px 11px", fontSize: 13 };
-  const pending = (allPto || []).filter((r) => r.status === "requested").slice().sort((a, b) => a.date.localeCompare(b.date));
-  const groups = {};
-  for (const r of pending) (groups[r.empId] = groups[r.empId] || []).push(r);
   const byDate = {};
   for (const r of allPto || []) if (r.status === "requested" || r.status === "approved") (byDate[r.date] = byDate[r.date] || []).push(r);
   const overlapsFor = (rec) => (byDate[rec.date] || []).filter((o) => o.empId !== rec.empId);
@@ -490,20 +487,28 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
         showToast && showToast("PTO added for " + addFor.name);
       }
     }
-  ), (() => {
-    const adminRecs = (allPto || []).filter((r) => r._admin).slice().sort((a, b) => a.date.localeCompare(b.date));
-    if (!adminRecs.length) return null;
-    const byEmp = {};
-    for (const r of adminRecs) (byEmp[r.empId] = byEmp[r.empId] || []).push(r);
-    return /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("label", null, "Recorded by admin"), Object.entries(byEmp).map(([empId, recs]) => /* @__PURE__ */ React.createElement("div", { className: "pto-group", key: "adm" + empId }, /* @__PURE__ */ React.createElement("div", { className: "pto-group-head" }, /* @__PURE__ */ React.createElement("strong", null, nameOf(empId)), /* @__PURE__ */ React.createElement("span", { className: "pto-group-count" }, recs.reduce((s, r) => s + (r.half ? 0.5 : 1), 0), " day", recs.length === 1 && !recs[0].half ? "" : "s")), recs.map((r) => /* @__PURE__ */ React.createElement("div", { className: "pto-req", key: r.id }, /* @__PURE__ */ React.createElement("span", null, fmtShortYr(r.date), r.half ? " \xB7 \xBD day" : ""), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", style: { ...sm }, onClick: () => onSetStatus([{ _admin: true, empId: r.empId, id: r.id }], null) }, "Remove"))))));
-  })(), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, Object.keys(groups).length === 0 ? /* @__PURE__ */ React.createElement("div", { className: "empty" }, "No pending PTO requests.") : Object.entries(groups).map(([empId, recs]) => {
-    const dc = recs.reduce((s, r) => s + (r.half ? 0.5 : 1), 0);
-    const items = recs.map((r) => ({ _uid: r._uid, id: r.id }));
-    return /* @__PURE__ */ React.createElement("div", { className: "pto-group", key: empId }, /* @__PURE__ */ React.createElement("div", { className: "pto-group-head" }, /* @__PURE__ */ React.createElement("strong", null, nameOf(empId)), /* @__PURE__ */ React.createElement("span", { className: "pto-group-count" }, dc, " day", dc === 1 ? "" : "s", " requested"), /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", whiteSpace: "nowrap" } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: sm, onClick: () => onSetStatus(items, "approved") }, "Approve all"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", style: { ...sm, marginLeft: 8 }, onClick: () => onSetStatus(items, null) }, "Deny all"))), recs.map((r) => {
-      const ov = overlapsFor(r);
-      return /* @__PURE__ */ React.createElement("div", { className: "pto-req", key: r.id }, /* @__PURE__ */ React.createElement("span", null, fmtShortYr(r.date), r.half ? " \xB7 \xBD day" : "", ov.length ? /* @__PURE__ */ React.createElement("span", { className: "pto-overlap" }, " \u26A0 also off: ", ov.map((o) => nameOf(o.empId)).join(", ")) : null), /* @__PURE__ */ React.createElement("span", { style: { whiteSpace: "nowrap" } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: sm, onClick: () => onSetStatus([{ _uid: r._uid, id: r.id }], "approved") }, "Approve"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", style: { ...sm, marginLeft: 8 }, onClick: () => onSetStatus([{ _uid: r._uid, id: r.id }], null) }, "Deny")));
-    }));
-  })));
+  ), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("label", null, "PTO by employee"), (() => {
+    const withPto = employees.filter((e) => Number(e.ptoDays) > 0 || (allPto || []).some((r) => r.empId === e.id)).sort((a, b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
+    if (!withPto.length) return /* @__PURE__ */ React.createElement("div", { className: "empty" }, "No PTO allowances or records yet.");
+    return withPto.map((e) => {
+      const recs = (allPto || []).filter((r) => r.empId === e.id).slice().sort((a, b) => a.date.localeCompare(b.date));
+      const yStart = ptoYearStartDate(e.startDate);
+      const wStart = yStart ? localISO(yStart) : null;
+      const wEnd = yStart ? localISO(new Date(yStart.getFullYear() + 1, yStart.getMonth(), yStart.getDate())) : null;
+      const inYear = (d) => wStart ? d >= wStart && d < wEnd : String(d || "").slice(0, 4) === todayISO().slice(0, 4);
+      const used = recs.filter((r) => r.status === "approved" && inYear(r.date)).reduce((s, r) => s + ptoDayValue(r), 0);
+      const pend = recs.filter((r) => r.status === "requested");
+      const pendDays = pend.reduce((s, r) => s + ptoDayValue(r), 0);
+      const allow = Number(e.ptoDays) || 0;
+      const left = Math.max(0, allow - used);
+      const pendItems = pend.map((r) => ({ _uid: r._uid, id: r.id }));
+      return /* @__PURE__ */ React.createElement("div", { className: "pto-group", key: "sum" + e.id }, /* @__PURE__ */ React.createElement("div", { className: "pto-group-head" }, /* @__PURE__ */ React.createElement("strong", null, lastFirst(e.name)), /* @__PURE__ */ React.createElement("span", { className: "pto-group-count" }, allow > 0 ? `${used} used of ${allow} \xB7 ${left} left` : `${used} used (no allowance set)`, pendDays > 0 ? ` \xB7 ${pendDays} pending` : ""), pend.length > 0 && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", whiteSpace: "nowrap" } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: sm, onClick: () => onSetStatus(pendItems, "approved") }, "Approve all"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", style: { ...sm, marginLeft: 8 }, onClick: () => onSetStatus(pendItems, null) }, "Deny all"))), recs.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "pto-req" }, /* @__PURE__ */ React.createElement("span", { style: { color: "var(--muted)" } }, "No days recorded.")), recs.map((r) => {
+        const ov = r.status === "requested" ? overlapsFor(r) : [];
+        const item = r._admin ? { _admin: true, empId: r.empId, id: r.id } : { _uid: r._uid, id: r.id };
+        return /* @__PURE__ */ React.createElement("div", { className: "pto-req", key: r.id }, /* @__PURE__ */ React.createElement("span", null, fmtShortYr(r.date), r.half ? " \xB7 \xBD day" : "", /* @__PURE__ */ React.createElement("span", { style: { marginLeft: 8, fontSize: 12, color: r.status === "requested" ? "var(--amber)" : "var(--muted)" } }, r.status === "requested" ? "requested" : r._admin ? "approved \xB7 admin-entered" : "approved"), !inYear(r.date) && r.status === "approved" ? /* @__PURE__ */ React.createElement("span", { style: { marginLeft: 8, fontSize: 12, color: "var(--faint)" } }, "(outside current PTO year)") : null, ov.length ? /* @__PURE__ */ React.createElement("span", { className: "pto-overlap" }, " \u26A0 also off: ", ov.map((o) => nameOf(o.empId)).join(", ")) : null), /* @__PURE__ */ React.createElement("span", { style: { whiteSpace: "nowrap" } }, r.status === "requested" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: sm, onClick: () => onSetStatus([item], "approved") }, "Approve"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", style: { ...sm, marginLeft: 8 }, onClick: () => onSetStatus([item], null) }, "Deny")) : /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", style: sm, onClick: () => onSetStatus([item], null) }, "Remove")));
+      }));
+    });
+  })()));
 }
 function App() {
   const [loaded, setLoaded] = useState(false);
