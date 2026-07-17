@@ -17,8 +17,7 @@ const VARIABLE = [
 const ALL_TYPES = [...FIXED, ...VARIABLE];
 const OTHER_ENABLED = false;
 const PTO_ENABLED = true;
-const PTO_TEST_USERS = /* @__PURE__ */ new Set(["nsutaria"]);
-const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username || "").trim().toLowerCase());
+const ptoVisibleFor = () => PTO_ENABLED;
 const ptoEligible = (emp) => !!emp && ptoVisibleFor(emp.username) && Number(emp.ptoDays) > 0;
 const ROLE_CANON = ["MD", "NP", "Staff", "Scribe"];
 const ROLE_RANK = { md: 0, np: 1, staff: 2, scribe: 3 };
@@ -62,7 +61,9 @@ const lastFirst = (name) => {
   return last + ", " + words.join(" ") + (creds.length ? " " + creds.join(" ") : "");
 };
 const money = (n) => "$" + (Math.round(n * 100) / 100).toLocaleString(void 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const todayISO = () => (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+const CT_TZ = "America/Chicago";
+const todayISO = () => (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: CT_TZ });
+const nowCT = () => new Date((/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: CT_TZ }));
 const PERIOD_ANCHOR_START = "2026-06-14";
 const PERIOD_LEN_DAYS = 14;
 const PAYDAY_OFFSET_DAYS = 6;
@@ -111,15 +112,15 @@ function periodByIndex(i) {
     paydayLabel: fmtShort(fmtISO(payday))
   };
 }
-function isPeriodLocked(p, now = /* @__PURE__ */ new Date()) {
+function isPeriodLocked(p, now = nowCT()) {
   return now >= p.lockAt;
 }
-function isPeriodLockedCombined(periodIndex, manualLocks, manualUnlocks = [], now = /* @__PURE__ */ new Date()) {
+function isPeriodLockedCombined(periodIndex, manualLocks, manualUnlocks = [], now = nowCT()) {
   if (Array.isArray(manualUnlocks) && manualUnlocks.includes(periodIndex)) return false;
   if (Array.isArray(manualLocks) && manualLocks.includes(periodIndex)) return true;
   return isPeriodLocked(periodByIndex(periodIndex), now);
 }
-function dateInLockedPeriod(iso, manualLocks, manualUnlocks = [], now = /* @__PURE__ */ new Date()) {
+function dateInLockedPeriod(iso, manualLocks, manualUnlocks = [], now = nowCT()) {
   return isPeriodLockedCombined(periodIndexFor(iso), manualLocks, manualUnlocks, now);
 }
 function currentPeriodIndex() {
@@ -193,16 +194,25 @@ async function saveCertForUid(uid, periodIdx, cap, atISO) {
     return false;
   }
 }
+let UID_BY_EMP = {};
+const resolveUidForEmp = (empId, entries) => UID_BY_EMP[empId] || ((entries || []).find((e) => e.empId === empId) || {})._uid || null;
 async function loadAllEntries() {
   try {
     const snap = await window._fs.getDocs(window._fs.collection(window._db, "paytracker_entries"));
-    const all = [];
+    const all = [], byEntries = {}, byMarker = {};
     snap.forEach((d) => {
       if (d.id === SALARY_DOC || d.id === ADJ_DOC) return;
-      const v = d.data() && d.data().value;
+      const data = d.data() || {};
+      const isEmpDoc = String(d.id).startsWith("emp_");
+      if (data.empId && !isEmpDoc) byMarker[data.empId] = d.id;
+      const v = data.value;
       if (!Array.isArray(v)) return;
+      if (!isEmpDoc) v.forEach((e) => {
+        if (e && e.empId) byEntries[e.empId] = d.id;
+      });
       v.forEach((e) => all.push({ ...e, _uid: d.id }));
     });
+    UID_BY_EMP = { ...byEntries, ...byMarker };
     return all;
   } catch (e) {
     console.error("all-entries read failed", e);
@@ -430,17 +440,15 @@ function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel, a
   return /* @__PURE__ */ React.createElement("div", { className: "modal-backdrop", onClick: onClose }, /* @__PURE__ */ React.createElement("div", { className: "modal pto-modal", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { className: "pto-head" }, /* @__PURE__ */ React.createElement("h3", null, allowPast ? "Enter PTO" : "Request PTO"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", style: { padding: "4px 10px" }, onClick: onClose }, "\u2715")), /* @__PURE__ */ React.createElement("div", { className: "pto-counter" }, /* @__PURE__ */ React.createElement("strong", null, remaining), " of ", allow, " day", allow === 1 ? "" : "s", " left", requestedDays > 0 ? /* @__PURE__ */ React.createElement("span", null, " \xB7 ", requestedDays, " requested") : null, selDays > 0 ? /* @__PURE__ */ React.createElement("span", null, " \xB7 selecting ", selDays) : null), /* @__PURE__ */ React.createElement("div", { className: "pto-monthnav" }, /* @__PURE__ */ React.createElement("button", { onClick: prevM, "aria-label": "Previous month" }, "\u2039"), /* @__PURE__ */ React.createElement("span", null, monthName), /* @__PURE__ */ React.createElement("button", { onClick: nextM, "aria-label": "Next month" }, "\u203A")), /* @__PURE__ */ React.createElement("div", { className: "pto-grid" }, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => /* @__PURE__ */ React.createElement("div", { key: "dow" + i, className: "pto-dow" }, d[0])), cells.map((dt, i) => {
     if (!dt) return /* @__PURE__ */ React.createElement("div", { key: "b" + i, className: "pto-cell blank" });
     const ds = localISO(dt);
-    const dow = dt.getDay();
-    const weekend = dow === 0 || dow === 6;
     const past = ds < todayStr;
     const ex = byDate[ds];
     const ss = sel[ds];
-    const hardLocked = weekend || past && !allowPast || ex && ex.status === "approved";
+    const hardLocked = past && !allowPast || ex && ex.status === "approved";
     let cls = "pto-cell";
     if (ex && ex.status === "approved") cls += " approved";
     else if (ex && ex.status === "requested") cls += " requested";
     else if (ss) cls += ss.half ? " sel half" : " sel";
-    else if (weekend || past && !allowPast) cls += " muted";
+    else if (past && !allowPast) cls += " muted";
     return /* @__PURE__ */ React.createElement("div", { key: ds, className: cls, onClick: () => {
       if (hardLocked) return;
       if (ex && ex.status === "requested") {
@@ -624,19 +632,58 @@ function App() {
       }
     };
   }, [uid]);
+  const stampedRef = useRef(false);
+  useEffect(() => {
+    if (!uid || isOwner || !myEmp || stampedRef.current) return;
+    stampedRef.current = true;
+    try {
+      window._fs.setDoc(
+        window._fs.doc(window._db, "paytracker_entries", uid),
+        { empId: myEmp.id, username: normU(myEmp.username) },
+        { merge: true }
+      ).catch(() => {
+      });
+    } catch (e) {
+    }
+  }, [uid, isOwner, myEmp && myEmp.id]);
+  const healedRef = useRef(false);
+  useEffect(() => {
+    if (!isOwner || healedRef.current) return;
+    if (!entries.length && !Object.keys(salaries || {}).length) return;
+    healedRef.current = true;
+    (async () => {
+      for (const [empId, annual] of Object.entries(salaries || {})) {
+        const docId = resolveUidForEmp(empId, entries);
+        if (docId && !String(docId).startsWith("emp_")) await saveMySalary(docId, annual);
+      }
+      const byEmp = {};
+      for (const [pIdx, perEmp] of Object.entries(adjustments || {}))
+        for (const [empId, a] of Object.entries(perEmp || {}))
+          (byEmp[empId] = byEmp[empId] || {})[pIdx] = { bonus: Number(a.bonus) || 0, reimbursement: Number(a.reimbursement) || 0 };
+      for (const [empId, perPeriod] of Object.entries(byEmp)) {
+        const docId = resolveUidForEmp(empId, entries);
+        if (docId && !String(docId).startsWith("emp_")) await saveMyAdj(docId, perPeriod);
+      }
+    })().catch(() => {
+    });
+  }, [isOwner, entries, salaries, adjustments]);
   const persistEmployees = useCallback(async (next) => {
     setEmployees(next);
     await sSet("employees", next);
     await savePublicRoster(next);
   }, []);
+  const mirrorTarget = useCallback((empId) => {
+    const docId = resolveUidForEmp(empId, entries);
+    return docId && !String(docId).startsWith("emp_") ? docId : null;
+  }, [entries]);
   const persistSalaries = useCallback(async (map) => {
     setSalaries(map);
     await saveSalaries(map);
     for (const [empId, annual] of Object.entries(map)) {
-      const docId = (entries.find((e) => e.empId === empId) || {})._uid;
+      const docId = mirrorTarget(empId);
       if (docId) await saveMySalary(docId, annual);
     }
-  }, [entries]);
+  }, [mirrorTarget]);
   const persistAdjustments = useCallback(async (map) => {
     setAdjustments(map);
     await saveAdjustments(map);
@@ -645,10 +692,10 @@ function App() {
       for (const [empId, a] of Object.entries(perEmp || {}))
         (byEmp[empId] = byEmp[empId] || {})[pIdx] = { bonus: Number(a.bonus) || 0, reimbursement: Number(a.reimbursement) || 0 };
     for (const [empId, perPeriod] of Object.entries(byEmp)) {
-      const docId = (entries.find((e) => e.empId === empId) || {})._uid;
+      const docId = mirrorTarget(empId);
       if (docId) await saveMyAdj(docId, perPeriod);
     }
-  }, [entries]);
+  }, [mirrorTarget]);
   const setPtoStatus = useCallback(async (items, newStatus) => {
     const adminItems = items.filter((it) => it._admin);
     const regItems = items.filter((it) => !it._admin);
@@ -706,16 +753,16 @@ function App() {
     await sSet("manualUnlocks", nextUnlocks);
   }, []);
   const upsertEntry = useCallback(async (entry) => {
-    if (!uid) return false;
+    if (!uid) return { saved: false };
     const latest = await loadEntriesForUid(uid);
     const rest = latest.filter((e) => !(e.empId === entry.empId && e.date === entry.date));
     const hasCounts = entry.counts && Object.values(entry.counts).some((v) => Number(v) > 0);
     const hasOther = entry.other && Number(entry.other.amount) > 0;
     const hasAny = hasCounts || hasOther;
     const next = hasAny ? [...rest, entry] : rest;
-    setEntries(next);
-    await saveEntriesForUid(uid, next);
-    return hasAny;
+    const ok = await saveEntriesForUid(uid, next);
+    if (ok) setEntries(next);
+    return { saved: ok, hasAny };
   }, [uid]);
   const certifyPeriod = useCallback(async (periodIdx, cap) => {
     if (!uid) return;
@@ -730,10 +777,11 @@ function App() {
     const latest = await loadPto(uid);
     const taken = new Set(latest.map((r) => r.date));
     const fresh = Object.entries(sel || {}).filter(([date]) => !taken.has(date)).map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2, 6), empId, date, half: !!(v && v.half), status: "requested", requestedAt: now }));
-    if (!fresh.length) return;
+    if (!fresh.length) return true;
     const merged = [...latest, ...fresh];
-    setPto(merged);
-    await savePto(uid, merged);
+    const ok = await savePto(uid, merged);
+    if (ok) setPto(merged);
+    return ok;
   }, [uid, myEmp]);
   const cancelPto = useCallback(async (date) => {
     if (!uid) return;
@@ -748,9 +796,9 @@ function App() {
     let docId;
     if (emp.isManager) {
       const managedIds = new Set(employees.filter((e) => e.managedBy === emp.id).map((e) => e.id));
-      docId = (entries.find((e) => managedIds.has(e.empId)) || {})._uid || emp.id;
+      docId = (entries.find((e) => managedIds.has(e.empId)) || {})._uid || resolveUidForEmp(emp.id, entries) || emp.id;
     } else {
-      docId = (entries.find((e) => e.empId === emp.id) || {})._uid || emp.id;
+      docId = resolveUidForEmp(emp.id, entries) || emp.id;
     }
     setImpersonateDoc(docId);
     setImpersonateCerts({});
@@ -769,16 +817,16 @@ function App() {
   }, []);
   const upsertForImpersonated = useCallback(async (entry) => {
     const docId = impersonateDoc || impersonate && impersonate.id;
-    if (!docId) return false;
+    if (!docId) return { saved: false };
     const latest = await loadEntriesForUid(docId);
     const rest = latest.filter((e) => !(e.empId === entry.empId && e.date === entry.date));
     const hasCounts = entry.counts && Object.values(entry.counts).some((v) => Number(v) > 0);
     const hasOther = entry.other && Number(entry.other.amount) > 0;
     const hasAny = hasCounts || hasOther;
     const next = hasAny ? [...rest, entry] : rest;
-    await saveEntriesForUid(docId, next);
-    setEntries(await loadAllEntries());
-    return hasAny;
+    const ok = await saveEntriesForUid(docId, next);
+    if (ok) setEntries(await loadAllEntries());
+    return { saved: ok, hasAny };
   }, [impersonate, impersonateDoc]);
   const certifyForImpersonated = useCallback(async (periodIdx, cap) => {
     const docId = impersonateDoc || impersonate && impersonate.id;
@@ -1087,6 +1135,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const [otherNote, setOtherNote] = useState("");
   const [entryDirty, setEntryDirty] = useState(false);
   const [entrySaving, setEntrySaving] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
   const entryDirtyRef = useRef(false);
   const markEntryDirty = () => {
     entryDirtyRef.current = true;
@@ -1196,8 +1245,13 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
       return;
     }
     setEntrySaving(true);
-    await upsertEntry(r.entry);
+    const res = await upsertEntry(r.entry);
     setEntrySaving(false);
+    if (!res || res.saved === false) {
+      setSaveFailed(true);
+      return;
+    }
+    setSaveFailed(false);
     clearEntryDirty();
   };
   const flushEntry = () => {
@@ -1219,10 +1273,10 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
         onCancelPto && onCancelPto(date2);
         showToast && showToast("PTO request canceled");
       },
-      onSubmit: (sel) => {
-        onRequestPto(sel);
+      onSubmit: async (sel) => {
+        const ok = await onRequestPto(sel);
         setPtoOpen(false);
-        showToast && showToast("PTO request submitted");
+        showToast && showToast(ok === false ? "\u26A0 Couldn't submit your PTO request \u2014 try again" : "PTO request submitted");
       }
     }
   ), /* @__PURE__ */ React.createElement("h2", null, noPayTypes ? "Your pay" : "Log your work"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, noPayTypes ? /* @__PURE__ */ React.createElement(React.Fragment, null, "Signed in as ", /* @__PURE__ */ React.createElement("strong", null, emp.name), normU(emp.username) ? /* @__PURE__ */ React.createElement(React.Fragment, null, " (@", normU(emp.username), ")") : null, ". You're salaried \u2014 there's nothing to log day-to-day.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Logging as ", /* @__PURE__ */ React.createElement("strong", null, emp.name), " (@", normU(emp.username), "). Tap a day below to add or edit it.")), ptoEnabled && /* @__PURE__ */ React.createElement("div", { className: "pto-line" }, approvedPto.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "pto-status" }, "Approved PTO: ", ptoFmt(approvedPto)), requestedPto.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "pto-status pending" }, "Requested PTO: ", ptoFmt(requestedPto), " \xB7 pending"), /* @__PURE__ */ React.createElement("a", { className: "pto-link", onClick: () => setPtoOpen(true) }, "Request PTO")), emp && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 22 } }), /* @__PURE__ */ React.createElement("div", { className: "period-nav" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
@@ -1320,7 +1374,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
       },
       style: !otherNote.trim() ? { borderColor: "var(--danger)" } : null
     }
-  ))), (!(Number(otherAmt) > 0) || !otherNote.trim()) && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 8 } }, "An Other line needs both a dollar amount and an explanation before it can be saved.")))), /* @__PURE__ */ React.createElement("div", { className: "savebar" }, /* @__PURE__ */ React.createElement("div", { style: { alignSelf: "center", marginRight: "auto", fontSize: 14, color: "var(--muted)" } }, "This entry: ", /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(liveTotal))), /* @__PURE__ */ React.createElement("span", { style: { alignSelf: "center", fontSize: 13, fontWeight: 500, color: "var(--accent-ink)" } }, entrySaving || entryDirty ? "Saving\u2026" : dayEntries(date).length ? "\u2713 Saved" : ""), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: () => {
+  ))), (!(Number(otherAmt) > 0) || !otherNote.trim()) && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 8 } }, "An Other line needs both a dollar amount and an explanation before it can be saved.")))), /* @__PURE__ */ React.createElement("div", { className: "savebar" }, /* @__PURE__ */ React.createElement("div", { style: { alignSelf: "center", marginRight: "auto", fontSize: 14, color: "var(--muted)" } }, "This entry: ", /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(liveTotal))), saveFailed ? /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", style: { alignSelf: "center", fontSize: 13 }, onClick: saveEntry }, "\u26A0 Not saved \u2014 tap to retry") : /* @__PURE__ */ React.createElement("span", { style: { alignSelf: "center", fontSize: 13, fontWeight: 500, color: "var(--accent-ink)" } }, entrySaving || entryDirty ? "Saving\u2026" : dayEntries(date).length ? "\u2713 Saved" : ""), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: () => {
     setCounts({});
     setOtherOn(false);
     setOtherAmt("");
@@ -1582,40 +1636,40 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     return locked && created && created > selPeriod.lockAt.getTime();
   }) : [];
   const exportADP = () => {
-    const header = ["Co Code", "Batch ID", "File #", "Employee Name", "Other Earnings Code", "Other Earnings Amount", "Consults", "Follow-ups", "Clinic Patients", "Per Diem", "Clinic Hrs", "Virtual Hrs", "In-Hospital Hrs", "Period Start", "Period End", "Payday"];
-    const lines = [header.join(",")];
-    const payday = mode === "period" ? selPeriod.payday : "";
-    rows.filter((r) => r.pay > 0).forEach((r) => {
-      const c = r.counts;
-      const cell = (v) => {
-        const s = String(v ?? "");
-        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-      };
-      lines.push([
-        "",
-        "",
-        "",
-        r.emp.name,
-        "Other",
-        (Math.round(r.pay * 100) / 100).toFixed(2),
-        c.consults,
-        c.followups,
-        c.clinic_pts,
-        c.perdiem,
-        c.clinic_hr,
-        c.virtual_hr,
-        c.hosp_hr,
-        winFrom || "",
-        winTo || "",
-        payday
-      ].map(cell).join(","));
-    });
-    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const DASH = "\u2014";
+    const cents = (n) => Math.round(n * 100);
+    const header = ["EMPLOYEE (ADP NAME)", "TYPE", "1099COMP AMOUNT", "BONUS AMOUNT", "EXCLUDED SALARY", "TOTAL PAY"];
+    const out = [header];
+    let t1099 = 0, tBonus = 0, tExcl = 0;
+    const srows = [...rows].sort((a2, b) => lastFirst(a2.emp.name).localeCompare(lastFirst(b.emp.name)));
+    for (const r of srows) {
+      const taxType = r.removed ? "1099" : r.emp.taxType || (r.base > 0 ? "w2" : "1099");
+      if (r.pay === 0) {
+        out.push([lastFirst(r.emp.name), "no pay", DASH, DASH, DASH, DASH]);
+        continue;
+      }
+      if (taxType === "w2") {
+        const bonus = r.pay - r.base;
+        tBonus += cents(bonus);
+        tExcl += cents(r.base);
+        out.push([lastFirst(r.emp.name), "W2", DASH, bonus ? money(bonus) : DASH, r.base ? money(r.base) : DASH, money(r.pay)]);
+      } else {
+        t1099 += cents(r.pay);
+        out.push([lastFirst(r.emp.name), "1099", money(r.pay), DASH, DASH, money(r.pay)]);
+      }
+    }
+    out.push(["Total payroll", "", money(t1099 / 100), money(tBonus / 100), money(tExcl / 100), money(grand)]);
+    const cell = (v) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const csv = "\uFEFF" + out.map((row) => row.map(cell).join(",")).join("\r\n") + "\r\n";
+    const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    const tag = mode === "period" ? `payday_${selPeriod.payday}` : `${winFrom || "all"}_${winTo || "all"}`;
+    const tag = mode === "period" ? `${selPeriod.start}_to_${selPeriod.end}` : `${winFrom || "all"}_${winTo || "all"}`;
     a.href = url;
-    a.download = `adp_paydata_${tag}.csv`;
+    a.download = `payroll_${tag}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();

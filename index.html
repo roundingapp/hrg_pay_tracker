@@ -270,7 +270,8 @@
 <!-- ============================================================= -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getFirestore, initializeFirestore, doc, getDoc, getDocFromServer, setDoc, collection, getDocs, getDocsFromServer, onSnapshot }
+  import { getFirestore, initializeFirestore, doc, getDoc, getDocFromServer, setDoc, collection, getDocs, getDocsFromServer, onSnapshot,
+           persistentLocalCache, persistentMultipleTabManager }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail, sendPasswordResetEmail }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -288,11 +289,14 @@
 
   const app = initializeApp(firebaseConfig);
   // auto-detect long-polling: use it immediately on networks that block WebChannel streaming,
-  // instead of waiting for the stream to time out and fall back (big stall on VPN/mobile/corp nets)
-  window._db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
-  // Normal reads: with no offline persistence enabled, getDoc/getDocs are already server-fresh
-  // when online — and they establish the connection far faster on a cold/VPN load than the
-  // *FromServer variants, which could hang for minutes on a fresh cache (the 3-min view-as wait).
+  // instead of waiting for the stream to time out and fall back (big stall on VPN/mobile/corp nets).
+  // persistentLocalCache: queued WRITES survive tab-close and sync when signal returns — staff
+  // log from hospital dead zones; before this, an offline entry died with the tab (silent loss).
+  // Reads stay server-first when online (getDoc falls back to cache only when unreachable).
+  window._db = initializeFirestore(app, {
+    experimentalAutoDetectLongPolling: true,
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  });
   window._fs = { doc, getDoc, setDoc, collection, getDocs, onSnapshot };
   window._auth = getAuth(app);
   window._authfns = { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail, sendPasswordResetEmail };
@@ -301,10 +305,15 @@
 </script>
 <!-- ============================================================= -->
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+<!-- SRI pins: a compromised CDN can't inject code into a payroll app (browser refuses a
+     script whose hash doesn't match). Bumping a version requires recomputing its hash. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"
+  integrity="sha384-tMH8h3BGESGckSAVGZ82T9n90ztNXxvdwvdM6UoR56cYcf+0iGXBliJ29D+wZ/x8" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"
+  integrity="sha384-bm7MnzvK++ykSwVJ2tynSE5TRdN+xL418osEVF2DE/L/gfWHj91J2Sphe582B1Bh" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"
+  integrity="sha384-HZZ/fukV+9G8gwTNjN7zQDG0Sp7MsZy5DDN6VfY3Be7V9dvQpEpR2jF2HlyFUUjU" crossorigin="anonymous"></script>
 
-<script defer src="app.js?v=e0ea1426"></script>
+<script defer src="app.js?v=6438a57f"></script>
 </body>
 </html>

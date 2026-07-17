@@ -23,11 +23,9 @@ const ALL_TYPES = [...FIXED, ...VARIABLE];
 // Employee-entered "Other" one-off amounts are deactivated (abuse vector). All Other logic stays
 // wired (build/save/load/totals) and the roll-up Other column remains — flip to true to re-enable.
 const OTHER_ENABLED = false;
-// PTO feature: ON for all staff who have a PTO allowance (ptoDays>0). PTO_TEST_USERS is a
-// legacy override that force-shows it for a username even without the global flag.
+// PTO feature: ON for all staff who have a PTO allowance (ptoDays>0).
 const PTO_ENABLED = true;
-const PTO_TEST_USERS = new Set(["nsutaria"]);
-const ptoVisibleFor = (username) => PTO_ENABLED || PTO_TEST_USERS.has(String(username||"").trim().toLowerCase());
+const ptoVisibleFor = () => PTO_ENABLED;
 // a person sees PTO only if the feature is on for them AND they actually have a PTO allowance (>0)
 const ptoEligible = (emp) => !!emp && ptoVisibleFor(emp.username) && Number(emp.ptoDays) > 0;
 // employee roles — canonical set + display order for the roster grouping
@@ -82,7 +80,12 @@ const lastFirst = (name) => {
 };
 
 const money = n => "$" + (Math.round(n * 100) / 100).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-const todayISO = () => new Date().toISOString().slice(0,10);
+// All date/period boundaries anchor to US CENTRAL time (the practice's timezone) — not the
+// device timezone, and not UTC (the old toISOString() flipped "today" at ~6-7pm CT).
+// "Today", the future-date block, period cutoffs, and the 72h pre-payday lock all use CT.
+const CT_TZ = "America/Chicago";
+const todayISO = () => new Date().toLocaleDateString("en-CA", { timeZone: CT_TZ });   // YYYY-MM-DD in CT
+const nowCT = () => new Date(new Date().toLocaleString("en-US", { timeZone: CT_TZ }));  // CT wall-clock as a Date
 
 /* ---------- pay period model ----------
    14-day biweekly. Anchor period: Sun 2026-06-14 .. Sat 2026-06-27, paid Fri 2026-07-03.
@@ -123,16 +126,17 @@ function periodByIndex(i) {
     paydayLabel: fmtShort(fmtISO(payday)),
   };
 }
-// is a period locked right now? (auto: 72h before payday)
-function isPeriodLocked(p, now = new Date()) { return now >= p.lockAt; }
+// is a period locked right now? (auto: 72h before payday). lockAt is CT wall-clock
+// (built from date components), so compare against "now" in the same CT frame.
+function isPeriodLocked(p, now = nowCT()) { return now >= p.lockAt; }
 // combined lock: an admin force-unlock overrides everything, then admin force-lock, then auto-lock
-function isPeriodLockedCombined(periodIndex, manualLocks, manualUnlocks = [], now = new Date()) {
+function isPeriodLockedCombined(periodIndex, manualLocks, manualUnlocks = [], now = nowCT()) {
   if (Array.isArray(manualUnlocks) && manualUnlocks.includes(periodIndex)) return false;   // admin override: unlocked
   if (Array.isArray(manualLocks) && manualLocks.includes(periodIndex)) return true;         // admin force-lock
   return isPeriodLocked(periodByIndex(periodIndex), now);                                    // auto (72h pre-payday)
 }
 // is a given ISO date inside any locked period?
-function dateInLockedPeriod(iso, manualLocks, manualUnlocks = [], now = new Date()) {
+function dateInLockedPeriod(iso, manualLocks, manualUnlocks = [], now = nowCT()) {
   return isPeriodLockedCombined(periodIndexFor(iso), manualLocks, manualUnlocks, now);
 }
 // the period index for "today"
@@ -201,17 +205,30 @@ async function saveCertForUid(uid, periodIdx, cap, atISO) {
     return true;
   } catch (e) { console.error("cert write failed", e); return false; }
 }
+// empId → auth-uid registry. Learned from (a) the empId marker every staffer stamps into
+// their own doc at login (authoritative — works for people with zero entries, e.g.
+// no-pay-type staff) and (b) the empId on logged entries (legacy fallback; a manager's doc
+// maps her managed staff here, so the self-stamped marker wins). Populated on every
+// owner loadAllEntries; consumed by resolveUidForEmp for mirrors and View-as.
+let UID_BY_EMP = {};
+const resolveUidForEmp = (empId, entries) =>
+  UID_BY_EMP[empId] || ((entries || []).find(e => e.empId === empId) || {})._uid || null;
 // owner-only: merge every NP's entries, tagging each with the uid doc it came from
 async function loadAllEntries() {
   try {
     const snap = await window._fs.getDocs(window._fs.collection(window._db, "paytracker_entries"));
-    const all = [];
+    const all = [], byEntries = {}, byMarker = {};
     snap.forEach(d => {
       if (d.id === SALARY_DOC || d.id === ADJ_DOC) return;   // owner-only object-valued docs live here too — skip
-      const v = d.data() && d.data().value;
+      const data = d.data() || {};
+      const isEmpDoc = String(d.id).startsWith("emp_");      // legacy empId-keyed docs aren't real logins
+      if (data.empId && !isEmpDoc) byMarker[data.empId] = d.id;
+      const v = data.value;
       if (!Array.isArray(v)) return;     // defensive: only per-NP entry arrays (never an object-valued doc)
+      if (!isEmpDoc) v.forEach(e => { if (e && e.empId) byEntries[e.empId] = d.id; });
       v.forEach(e => all.push({ ...e, _uid: d.id }));
     });
+    UID_BY_EMP = { ...byEntries, ...byMarker };   // marker beats entry-derived (manager docs)
     return all;
   } catch (e) { console.error("all-entries read failed", e); return []; }
 }
@@ -433,19 +450,18 @@ function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel, a
           {cells.map((dt,i) => {
             if (!dt) return <div key={"b"+i} className="pto-cell blank" />;
             const ds = localISO(dt);
-            const dow = dt.getDay();
-            const weekend = dow===0 || dow===6;
             const past = ds < todayStr;
             const ex = byDate[ds];
             const ss = sel[ds];
-            // past days are locked for self-service requests, but the admin can enter already-
-            // taken PTO on someone's behalf (allowPast) — e.g. backfilling days off from earlier.
-            const hardLocked = weekend || (past && !allowPast) || (ex && ex.status === "approved");
+            // weekends are selectable (several staff work weekend rotations). Past days are
+            // locked for self-service requests, but the admin can enter already-taken PTO on
+            // someone's behalf (allowPast) — e.g. backfilling days off from earlier.
+            const hardLocked = (past && !allowPast) || (ex && ex.status === "approved");
             let cls = "pto-cell";
             if (ex && ex.status==="approved") cls += " approved";
             else if (ex && ex.status==="requested") cls += " requested";
             else if (ss) cls += ss.half ? " sel half" : " sel";
-            else if (weekend || (past && !allowPast)) cls += " muted";
+            else if (past && !allowPast) cls += " muted";
             return (
               <div key={ds} className={cls} onClick={()=>{
                 if (hardLocked) return;
@@ -683,6 +699,43 @@ function App() {
     return () => { try { unsub && unsub(); } catch (e) {} };
   }, [uid]);
 
+  // Identity registry: every signed-in staffer stamps their empId into their OWN entries
+  // doc (merge write, once per session). This is the empId→auth-uid map that makes salary/
+  // bonus mirrors and View-as reach people who never log a pay entry (no-pay-type staff).
+  const stampedRef = useRef(false);
+  useEffect(() => {
+    if (!uid || isOwner || !myEmp || stampedRef.current) return;
+    stampedRef.current = true;
+    try {
+      window._fs.setDoc(window._fs.doc(window._db, "paytracker_entries", uid),
+        { empId: myEmp.id, username: normU(myEmp.username) }, { merge: true }).catch(() => {});
+    } catch (e) {}
+  }, [uid, isOwner, myEmp && myEmp.id]);
+
+  // Self-healing mirrors (owner, once per session): re-push salary + bonus/reimb mirrors
+  // wherever a uid is known — covers staff who registered AFTER the last roster save
+  // (their mirror was unreachable then, e.g. Base showed $0 until the next owner save).
+  const healedRef = useRef(false);
+  useEffect(() => {
+    if (!isOwner || healedRef.current) return;
+    if (!entries.length && !Object.keys(salaries || {}).length) return;   // wait for the data pull
+    healedRef.current = true;
+    (async () => {
+      for (const [empId, annual] of Object.entries(salaries || {})) {
+        const docId = resolveUidForEmp(empId, entries);
+        if (docId && !String(docId).startsWith("emp_")) await saveMySalary(docId, annual);
+      }
+      const byEmp = {};
+      for (const [pIdx, perEmp] of Object.entries(adjustments || {}))
+        for (const [empId, a] of Object.entries(perEmp || {}))
+          (byEmp[empId] = byEmp[empId] || {})[pIdx] = { bonus: Number(a.bonus)||0, reimbursement: Number(a.reimbursement)||0 };
+      for (const [empId, perPeriod] of Object.entries(byEmp)) {
+        const docId = resolveUidForEmp(empId, entries);
+        if (docId && !String(docId).startsWith("emp_")) await saveMyAdj(docId, perPeriod);
+      }
+    })().catch(() => {});
+  }, [isOwner, entries, salaries, adjustments]);
+
   const persistEmployees = useCallback(async (next) => {
     setEmployees(next);
     await sSet("employees", next);
@@ -690,15 +743,20 @@ function App() {
     // staff can't sign in and so logins can resolve usernames/emails
     await savePublicRoster(next);
   }, []);
+  // mirrors only go to REAL login docs (never legacy emp_-keyed docs staff can't read)
+  const mirrorTarget = useCallback((empId) => {
+    const docId = resolveUidForEmp(empId, entries);
+    return docId && !String(docId).startsWith("emp_") ? docId : null;
+  }, [entries]);
   const persistSalaries = useCallback(async (map) => {
     setSalaries(map);
     await saveSalaries(map);
     // mirror each person's own salary into their own entries doc so they can see their Base
     for (const [empId, annual] of Object.entries(map)) {
-      const docId = (entries.find(e => e.empId === empId) || {})._uid;
+      const docId = mirrorTarget(empId);
       if (docId) await saveMySalary(docId, annual);
     }
-  }, [entries]);
+  }, [mirrorTarget]);
   const persistAdjustments = useCallback(async (map) => {
     setAdjustments(map);
     await saveAdjustments(map);
@@ -708,10 +766,10 @@ function App() {
       for (const [empId, a] of Object.entries(perEmp || {}))
         (byEmp[empId] = byEmp[empId] || {})[pIdx] = { bonus: Number(a.bonus)||0, reimbursement: Number(a.reimbursement)||0 };
     for (const [empId, perPeriod] of Object.entries(byEmp)) {
-      const docId = (entries.find(e => e.empId === empId) || {})._uid;
+      const docId = mirrorTarget(empId);
       if (docId) await saveMyAdj(docId, perPeriod);
     }
-  }, [entries]);
+  }, [mirrorTarget]);
   // owner approves (status→approved) or denies (removes) PTO requests.
   // items = [{_uid, id}] for self-requested records, [{_admin:true, empId, id}] for admin-entered.
   const setPtoStatus = useCallback(async (items, newStatus) => {
@@ -776,18 +834,20 @@ function App() {
     await sSet("manualUnlocks", nextUnlocks);
   }, []);
 
-  // NP upsert: one row per (empId,date) inside this NP's own entries doc
+  // NP upsert: one row per (empId,date) inside this NP's own entries doc.
+  // Returns {saved} — callers MUST surface saved:false (a rejected write must never
+  // look like "✓ Saved"; that's silent payroll loss).
   const upsertEntry = useCallback(async (entry) => {
-    if (!uid) return false;
+    if (!uid) return { saved: false };
     const latest = await loadEntriesForUid(uid);
     const rest = latest.filter(e => !(e.empId === entry.empId && e.date === entry.date));
     const hasCounts = entry.counts && Object.values(entry.counts).some(v => Number(v) > 0);
     const hasOther = entry.other && Number(entry.other.amount) > 0;
     const hasAny = hasCounts || hasOther;
     const next = hasAny ? [...rest, entry] : rest;
-    setEntries(next);
-    await saveEntriesForUid(uid, next);
-    return hasAny;
+    const ok = await saveEntriesForUid(uid, next);
+    if (ok) setEntries(next);
+    return { saved: ok, hasAny };
   }, [uid]);
 
   // capped NP certifies they've met their cap for a given pay period (records the cap value + time)
@@ -807,10 +867,11 @@ function App() {
     const fresh = Object.entries(sel || {})
       .filter(([date]) => !taken.has(date))
       .map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2,6), empId, date, half: !!(v && v.half), status: "requested", requestedAt: now }));
-    if (!fresh.length) return;
+    if (!fresh.length) return true;
     const merged = [...latest, ...fresh];
-    setPto(merged);
-    await savePto(uid, merged);
+    const ok = await savePto(uid, merged);   // only reflect a request the server actually took
+    if (ok) setPto(merged);
+    return ok;
   }, [uid, myEmp]);
   // cancel a still-pending (requested) PTO date by tapping it again
   const cancelPto = useCallback(async (date) => {
@@ -830,9 +891,9 @@ function App() {
     if (emp.isManager) {
       // a manager's entries live in HER own uid doc, tagged with each managed staffer's empId
       const managedIds = new Set(employees.filter(e => e.managedBy === emp.id).map(e => e.id));
-      docId = (entries.find(e => managedIds.has(e.empId)) || {})._uid || emp.id;
+      docId = (entries.find(e => managedIds.has(e.empId)) || {})._uid || resolveUidForEmp(emp.id, entries) || emp.id;
     } else {
-      docId = (entries.find(e => e.empId === emp.id) || {})._uid || emp.id;
+      docId = resolveUidForEmp(emp.id, entries) || emp.id;
     }
     setImpersonateDoc(docId);
     setImpersonateCerts({});
@@ -845,16 +906,16 @@ function App() {
   // owner edits on an employee's behalf — writes to THEIR entries doc (rules allow it: isOwner)
   const upsertForImpersonated = useCallback(async (entry) => {
     const docId = impersonateDoc || (impersonate && impersonate.id);
-    if (!docId) return false;
+    if (!docId) return { saved: false };
     const latest = await loadEntriesForUid(docId);
     const rest = latest.filter(e => !(e.empId === entry.empId && e.date === entry.date));
     const hasCounts = entry.counts && Object.values(entry.counts).some(v => Number(v) > 0);
     const hasOther = entry.other && Number(entry.other.amount) > 0;
     const hasAny = hasCounts || hasOther;
     const next = hasAny ? [...rest, entry] : rest;
-    await saveEntriesForUid(docId, next);
-    setEntries(await loadAllEntries());
-    return hasAny;
+    const ok = await saveEntriesForUid(docId, next);
+    if (ok) setEntries(await loadAllEntries());
+    return { saved: ok, hasAny };
   }, [impersonate, impersonateDoc]);
   const certifyForImpersonated = useCallback(async (periodIdx, cap) => {
     const docId = impersonateDoc || (impersonate && impersonate.id);
@@ -1158,6 +1219,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const [otherNote, setOtherNote] = useState("");
   const [entryDirty, setEntryDirty] = useState(false);   // unsaved edits on the selected day
   const [entrySaving, setEntrySaving] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);   // last save REJECTED — never show "Saved"
   const entryDirtyRef = useRef(false);
   const markEntryDirty = () => { entryDirtyRef.current = true; setEntryDirty(true); };
   const clearEntryDirty = () => { entryDirtyRef.current = false; setEntryDirty(false); };
@@ -1264,8 +1326,13 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     if (r.incomplete) return;                       // wait until the Other line is complete (stay dirty)
     if (r.skip) { clearEntryDirty(); return; }       // nothing to save
     setEntrySaving(true);
-    await upsertEntry(r.entry);
+    const res = await upsertEntry(r.entry);
     setEntrySaving(false);
+    if (!res || res.saved === false) {              // write REJECTED → stay dirty, show retry
+      setSaveFailed(true);
+      return;
+    }
+    setSaveFailed(false);
     clearEntryDirty();
   };
   // flush a pending save immediately (e.g. before switching days, so edits aren't lost)
@@ -1282,7 +1349,8 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
       {ptoOpen && <PtoCalendar pto={pto} allowance={ptoAllowance} startDate={ptoStartDate}
         onClose={()=>setPtoOpen(false)}
         onCancel={(date)=>{ onCancelPto && onCancelPto(date); showToast && showToast("PTO request canceled"); }}
-        onSubmit={(sel)=>{ onRequestPto(sel); setPtoOpen(false); showToast && showToast("PTO request submitted"); }} />}
+        onSubmit={async (sel)=>{ const ok = await onRequestPto(sel); setPtoOpen(false);
+          showToast && showToast(ok === false ? "⚠ Couldn't submit your PTO request — try again" : "PTO request submitted"); }} />}
       <h2>{noPayTypes ? "Your pay" : "Log your work"}</h2>
       <p className="hint">{noPayTypes
         ? <>Signed in as <strong>{emp.name}</strong>{normU(emp.username) ? <> (@{normU(emp.username)})</> : null}. You're salaried — there's nothing to log day-to-day.</>
@@ -1466,9 +1534,13 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
             <div style={{alignSelf:"center", marginRight:"auto", fontSize:14, color:"var(--muted)"}}>
               This entry: <span className="pay">{money(liveTotal)}</span>
             </div>
-            <span style={{alignSelf:"center", fontSize:13, fontWeight:500, color:"var(--accent-ink)"}}>
-              {(entrySaving || entryDirty) ? "Saving…" : dayEntries(date).length ? "✓ Saved" : ""}
-            </span>
+            {saveFailed
+              ? <button className="btn btn-danger" style={{alignSelf:"center", fontSize:13}} onClick={saveEntry}>
+                  ⚠ Not saved — tap to retry
+                </button>
+              : <span style={{alignSelf:"center", fontSize:13, fontWeight:500, color:"var(--accent-ink)"}}>
+                  {(entrySaving || entryDirty) ? "Saving…" : dayEntries(date).length ? "✓ Saved" : ""}
+                </span>}
             <button className="btn btn-ghost" onClick={()=>{ setCounts({}); setOtherOn(false); setOtherAmt(""); setOtherNote(""); markEntryDirty(); }}>Clear</button>
           </div>
         </>
@@ -1714,24 +1786,38 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
       })
     : [];
 
+  // ADP-ready CSV — SAME format/semantics as the biweekly payroll email (payroll-summary.mjs,
+  // Shikha's 7/14 spec): W2 → salary as EXCLUDED + production as BONUS; 1099 → everything as
+  // 1099COMP; $0 rows kept as "no pay"; removed staff exported as 1099. The old export put
+  // base salary in "Other Earnings Amount", which would DOUBLE-PAY W2 salaried staff if keyed
+  // into ADP (ADP already pays their salary) — never resurrect that format.
   const exportADP = () => {
-    const header = ["Co Code","Batch ID","File #","Employee Name","Other Earnings Code","Other Earnings Amount","Consults","Follow-ups","Clinic Patients","Per Diem","Clinic Hrs","Virtual Hrs","In-Hospital Hrs","Period Start","Period End","Payday"];
-    const lines = [header.join(",")];
-    const payday = mode === "period" ? selPeriod.payday : "";
-    rows.filter(r=>r.pay>0).forEach((r) => {
-      const c = r.counts;
-      const cell = v => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
-      lines.push([
-        "", "", "", r.emp.name, "Other", (Math.round(r.pay*100)/100).toFixed(2),
-        c.consults, c.followups, c.clinic_pts, c.perdiem, c.clinic_hr, c.virtual_hr, c.hosp_hr,
-        winFrom||"", winTo||"", payday
-      ].map(cell).join(","));
-    });
-    const blob = new Blob([lines.join("\n")], {type:"text/csv"});
+    const DASH = "—";
+    const cents = n => Math.round(n * 100);
+    const header = ["EMPLOYEE (ADP NAME)","TYPE","1099COMP AMOUNT","BONUS AMOUNT","EXCLUDED SALARY","TOTAL PAY"];
+    const out = [header];
+    let t1099 = 0, tBonus = 0, tExcl = 0;
+    const srows = [...rows].sort((a,b) => lastFirst(a.emp.name).localeCompare(lastFirst(b.emp.name)));
+    for (const r of srows) {
+      const taxType = r.removed ? "1099" : (r.emp.taxType || (r.base > 0 ? "w2" : "1099"));
+      if (r.pay === 0) { out.push([lastFirst(r.emp.name), "no pay", DASH, DASH, DASH, DASH]); continue; }
+      if (taxType === "w2") {
+        const bonus = r.pay - r.base;
+        tBonus += cents(bonus); tExcl += cents(r.base);
+        out.push([lastFirst(r.emp.name), "W2", DASH, bonus ? money(bonus) : DASH, r.base ? money(r.base) : DASH, money(r.pay)]);
+      } else {
+        t1099 += cents(r.pay);
+        out.push([lastFirst(r.emp.name), "1099", money(r.pay), DASH, DASH, money(r.pay)]);
+      }
+    }
+    out.push(["Total payroll", "", money(t1099/100), money(tBonus/100), money(tExcl/100), money(grand)]);
+    const cell = v => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+    const csv = "\ufeff" + out.map(row => row.map(cell).join(",")).join("\r\n") + "\r\n";   // BOM: Excel renders the em-dashes
+    const blob = new Blob([csv], {type:"text/csv"});
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    const tag = mode === "period" ? `payday_${selPeriod.payday}` : `${winFrom||"all"}_${winTo||"all"}`;
-    a.href = url; a.download = `adp_paydata_${tag}.csv`;
+    const tag = mode === "period" ? `${selPeriod.start}_to_${selPeriod.end}` : `${winFrom||"all"}_${winTo||"all"}`;
+    a.href = url; a.download = `payroll_${tag}.csv`;
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   };
 
