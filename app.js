@@ -336,6 +336,69 @@ async function saveMyAdj(uid, map) {
     return false;
   }
 }
+async function loadMyRoster(uid) {
+  try {
+    const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker_entries", uid));
+    const r = snap.exists() && snap.data() && snap.data().roster;
+    return Array.isArray(r) ? r : null;
+  } catch (e) {
+    return null;
+  }
+}
+async function loadMyAdminPto(uid) {
+  try {
+    const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker_entries", uid));
+    return snap.exists() && snap.data() && snap.data().adminPto || {};
+  } catch (e) {
+    return {};
+  }
+}
+async function saveMyMirror(uid, roster, adminPto, isManager) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", uid);
+    await window._fs.setDoc(ref, { roster, adminPto, isManager: !!isManager }, { merge: true });
+    return true;
+  } catch (e) {
+    console.error("mirror write failed", e);
+    return false;
+  }
+}
+async function loadVisibleRoster(uid) {
+  try {
+    const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker", "employees"));
+    const v = snap.exists() && snap.data() && snap.data().value;
+    if (Array.isArray(v) && v.length) return v;
+  } catch (e) {
+  }
+  return await loadMyRoster(uid) || [];
+}
+async function loadVisibleAdminPto(uid) {
+  try {
+    const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker", "ptoAdmin"));
+    const v = snap.exists() && snap.data() && snap.data().value;
+    if (v && typeof v === "object" && Object.keys(v).length) return v;
+  } catch (e) {
+  }
+  return await loadMyAdminPto(uid);
+}
+function scopedRosterFor(emp, all) {
+  if (!emp) return [];
+  const out = [emp];
+  if (emp.isManager) {
+    for (const s of all || []) if (s && s.managedBy === emp.id) out.push(s);
+  }
+  return out;
+}
+function scopedAdminPtoFor(emp, all, ptoAdmin) {
+  if (!emp) return {};
+  const ids = /* @__PURE__ */ new Set([emp.id]);
+  if (emp.isManager) {
+    for (const s of all || []) if (s && s.managedBy === emp.id) ids.add(s.id);
+  }
+  const out = {};
+  for (const id of ids) if ((ptoAdmin || {})[id]) out[id] = ptoAdmin[id];
+  return out;
+}
 async function loadPublicUsernames() {
   try {
     const ref = window._fs.doc(window._db, "public", "usernames");
@@ -558,7 +621,8 @@ function App() {
     try {
       const owner = isOwnerUser(u);
       const [emps, locks, unlocks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2, myPto, everyPto, adminPto] = await Promise.all([
-        sGet("employees", null),
+        loadVisibleRoster(u.uid),
+        // owner/manager: full roster; NP: own mirror
         sGet("manualLocks", []),
         sGet("manualUnlocks", []),
         owner ? loadAllEntries() : loadEntriesForUid(u.uid),
@@ -571,8 +635,8 @@ function App() {
         // the user's own PTO (owner has one too)
         owner ? loadAllPto() : Promise.resolve([]),
         // owner: everyone's PTO
-        loadPtoAdmin()
-        // admin-entered PTO (staff-readable)
+        loadVisibleAdminPto(u.uid)
+        // owner: all admin PTO; NP: own scoped mirror
       ]);
       const setIfChanged = (setter, next) => setter((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
       setIfChanged(setEmployees, emps && emps.length ? emps : []);
@@ -621,7 +685,7 @@ function App() {
     };
   }, [refresh]);
   useEffect(() => {
-    if (!uid || !window._fs || !window._fs.onSnapshot) return;
+    if (!uid || !isOwner || !window._fs || !window._fs.onSnapshot) return;
     const ref = window._fs.doc(window._db, "paytracker", "employees");
     const unsub = window._fs.onSnapshot(ref, (snap) => {
       const v = snap.exists() && snap.data() ? snap.data().value : [];
@@ -674,14 +738,23 @@ function App() {
         const docId = uidOf(empId);
         if (docId) await saveMyAdj(docId, perPeriod);
       }
+      for (const e of employees || []) {
+        const docId = uidOf(e.id);
+        if (docId) await saveMyMirror(docId, scopedRosterFor(e, employees), scopedAdminPtoFor(e, employees, ptoAdmin), !!e.isManager);
+      }
     })().catch(() => {
     });
-  }, [isOwner, entries, salaries, adjustments, allPto]);
+  }, [isOwner, entries, salaries, adjustments, allPto, employees, ptoAdmin]);
   const persistEmployees = useCallback(async (next) => {
     setEmployees(next);
     await sSet("employees", next);
     await savePublicRoster(next);
-  }, []);
+    for (const e of next) {
+      const docId = resolveUidForEmp(e.id, entries);
+      if (docId && !String(docId).startsWith("emp_"))
+        await saveMyMirror(docId, scopedRosterFor(e, next), scopedAdminPtoFor(e, next, ptoAdmin), !!e.isManager);
+    }
+  }, [entries, ptoAdmin]);
   const mirrorTarget = useCallback((empId) => {
     const docId = resolveUidForEmp(empId, entries);
     return docId && !String(docId).startsWith("emp_") ? docId : null;

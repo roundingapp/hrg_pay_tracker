@@ -328,6 +328,63 @@ async function saveMyAdj(uid, map) {
   } catch (e) { console.error("my-adj write failed", e); return false; }
 }
 
+// ---- per-person mirror (2026-07-27): each staffer's OWN scoped roster + admin PTO live on
+// their own doc, so regular NPs never read the owner-only shared roster/ptoAdmin. Owner and
+// managers still read the shared docs directly (the rules allow it); NPs fall back to these.
+async function loadMyRoster(uid) {
+  try {
+    const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker_entries", uid));
+    const r = snap.exists() && snap.data() && snap.data().roster;
+    return Array.isArray(r) ? r : null;
+  } catch (e) { return null; }
+}
+async function loadMyAdminPto(uid) {
+  try {
+    const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker_entries", uid));
+    return (snap.exists() && snap.data() && snap.data().adminPto) || {};
+  } catch (e) { return {}; }
+}
+async function saveMyMirror(uid, roster, adminPto, isManager) {
+  try {
+    const ref = window._fs.doc(window._db, "paytracker_entries", uid);
+    await window._fs.setDoc(ref, { roster, adminPto, isManager: !!isManager }, { merge: true });
+    return true;
+  } catch (e) { console.error("mirror write failed", e); return false; }
+}
+// Try the shared roster first (owner + managers are allowed); a regular NP is denied and
+// silently falls back to their own mirrored record. Quiet catch so NPs don't log errors.
+async function loadVisibleRoster(uid) {
+  try {
+    const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker", "employees"));
+    const v = snap.exists() && snap.data() && snap.data().value;
+    if (Array.isArray(v) && v.length) return v;
+  } catch (e) {}
+  return (await loadMyRoster(uid)) || [];
+}
+async function loadVisibleAdminPto(uid) {
+  try {
+    const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker", "ptoAdmin"));
+    const v = snap.exists() && snap.data() && snap.data().value;
+    if (v && typeof v === "object" && Object.keys(v).length) return v;
+  } catch (e) {}
+  return await loadMyAdminPto(uid);
+}
+// the records a given employee may see: their own + (managers) the staff they manage.
+function scopedRosterFor(emp, all) {
+  if (!emp) return [];
+  const out = [emp];
+  if (emp.isManager) for (const s of (all || [])) if (s && s.managedBy === emp.id) out.push(s);
+  return out;
+}
+function scopedAdminPtoFor(emp, all, ptoAdmin) {
+  if (!emp) return {};
+  const ids = new Set([emp.id]);
+  if (emp.isManager) for (const s of (all || [])) if (s && s.managedBy === emp.id) ids.add(s.id);
+  const out = {};
+  for (const id of ids) if ((ptoAdmin || {})[id]) out[id] = ptoAdmin[id];
+  return out;
+}
+
 /* ---------- public roster of valid usernames (collection "public", doc "usernames") ----------
    Publicly readable (no names/rates — just the list of active usernames) so the login screen
    can refuse anyone who isn't a current employee BEFORE any account is created. Owner-write only. */
@@ -636,7 +693,7 @@ function App() {
       const owner = isOwnerUser(u);
       // fire every read at once (they're independent) — was 8 sequential round-trips
       const [emps, locks, unlocks, entries, certs, salaries, mySalary, adjustments, myAdj, myPto, everyPto, adminPto] = await Promise.all([
-        sGet("employees", null),
+        loadVisibleRoster(u.uid),        // owner/manager: full roster; NP: own mirror
         sGet("manualLocks", []),
         sGet("manualUnlocks", []),
         owner ? loadAllEntries() : loadEntriesForUid(u.uid),
@@ -647,7 +704,7 @@ function App() {
         owner ? Promise.resolve({}) : loadMyAdj(u.uid),
         loadPto(u.uid),                                  // the user's own PTO (owner has one too)
         owner ? loadAllPto() : Promise.resolve([]),      // owner: everyone's PTO
-        loadPtoAdmin(),                                  // admin-entered PTO (staff-readable)
+        loadVisibleAdminPto(u.uid),                      // owner: all admin PTO; NP: own scoped mirror
       ]);
       // only touch state that actually changed — an unchanged pull must not re-render, because
       // browsers close/reset an open <select> (the View-as picker) when its options are rebuilt
@@ -693,7 +750,7 @@ function App() {
   // (and any rate/name change) shows up on the manager's / everyone's screen instantly — no waiting
   // for a refresh. The Rates editor's dirty-guard means this won't clobber an in-progress owner edit.
   useEffect(() => {
-    if (!uid || !window._fs || !window._fs.onSnapshot) return;
+    if (!uid || !isOwner || !window._fs || !window._fs.onSnapshot) return;   // owner-only: NPs can't read the shared roster
     const ref = window._fs.doc(window._db, "paytracker", "employees");
     const unsub = window._fs.onSnapshot(ref, (snap) => {
       const v = snap.exists() && snap.data() ? snap.data().value : [];
@@ -746,16 +803,26 @@ function App() {
         const docId = uidOf(empId);
         if (docId) await saveMyAdj(docId, perPeriod);
       }
+      // roster/PTO mirrors: give everyone their own scoped view so NPs need not read the shared docs
+      for (const e of (employees || [])) {
+        const docId = uidOf(e.id);
+        if (docId) await saveMyMirror(docId, scopedRosterFor(e, employees), scopedAdminPtoFor(e, employees, ptoAdmin), !!e.isManager);
+      }
     })().catch(() => {});
-  }, [isOwner, entries, salaries, adjustments, allPto]);
+  }, [isOwner, entries, salaries, adjustments, allPto, employees, ptoAdmin]);
 
   const persistEmployees = useCallback(async (next) => {
     setEmployees(next);
     await sSet("employees", next);
-    // keep the public roster (usernames + username→email directory) in sync so removed
-    // staff can't sign in and so logins can resolve usernames/emails
+    // keep the public roster (usernames + managed list only — NO emails) in sync so tooling stays current
     await savePublicRoster(next);
-  }, []);
+    // re-push each person's scoped roster/PTO mirror so their own view reflects the edit
+    for (const e of next) {
+      const docId = resolveUidForEmp(e.id, entries);
+      if (docId && !String(docId).startsWith("emp_"))
+        await saveMyMirror(docId, scopedRosterFor(e, next), scopedAdminPtoFor(e, next, ptoAdmin), !!e.isManager);
+    }
+  }, [entries, ptoAdmin]);
   // mirrors only go to REAL login docs (never legacy emp_-keyed docs staff can't read)
   const mirrorTarget = useCallback((empId) => {
     const docId = resolveUidForEmp(empId, entries);
