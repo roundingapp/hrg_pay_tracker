@@ -346,25 +346,22 @@ async function savePublicUsernames(list) {
     return true;
   } catch (e) { console.error("usernames write failed", e); return false; }
 }
-// public roster: usernames (for the lockout) + a username→email directory so the login
-// screen can resolve a typed username to its account email, and validate email logins,
-// BEFORE anyone signs in. Emails here are readable without auth (the accepted tradeoff).
+// public roster: usernames (legacy tooling) + the managed list. NO emails here — login is
+// email-only (2026-07-27), so no username→email directory is needed or exposed publicly.
 async function savePublicRoster(employees) {
-  const value = [], dir = {}, managed = [];
+  const value = [], managed = [];
   for (const e of employees) {
     const u = String(e.username||"").trim().toLowerCase();
     if (!u) continue;
     value.push(u);
-    dir[u] = String(e.email||"").trim().toLowerCase();   // "" until an email is filled in
-    if (e.managedBy) managed.push(u);   // entered by a manager → can't self-log in
+    if (e.managedBy) managed.push(u);   // entered by a manager → no self-login
   }
   try {
     const ref = window._fs.doc(window._db, "public", "usernames");
-    await window._fs.setDoc(ref, { value, dir, managed });
+    await window._fs.setDoc(ref, { value, managed });   // overwrite drops any legacy dir field
     return true;
   } catch (e) { console.error("roster write failed", e); return false; }
-}
-async function loadPublicRoster() {
+}async function loadPublicRoster() {
   try {
     const ref = window._fs.doc(window._db, "public", "usernames");
     const snap = await window._fs.getDoc(ref);
@@ -1050,161 +1047,45 @@ function App() {
 
 /* ---------- login (NP username / owner email) ---------- */
 function LoginScreen({ showToast }) {
-  const [mode, setMode] = useState("np");   // "np" | "owner"
   return (
     <div className="card lock-screen">
-      {mode === "np" ? <NPLogin showToast={showToast} /> : <OwnerLogin showToast={showToast} />}
-      <div style={{height:14}} />
-      <button className="btn btn-ghost" style={{width:"100%", fontSize:13}}
-        onClick={()=>setMode(mode==="np"?"owner":"np")}>
-        {mode==="np" ? "Admin" : "Back to staff sign in"}
-      </button>
+      <EmailLogin showToast={showToast} />
     </div>
   );
 }
 
-// NP login: enter email OR username → first time sets a password, after that signs in.
-// A username resolves to its account email via the public directory (real email if on file,
-// else the legacy internal address). Real emails also enable "forgot password".
-function NPLogin({ showToast }) {
-  const [idInput, setIdInput] = useState("");
-  const [pw, setPw] = useState("");
-  const [stage, setStage] = useState("user");   // "user" | "signin" | "create"
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [resolvedEmail, setResolvedEmail] = useState("");
-  const [isRealEmail, setIsRealEmail] = useState(false);
-  const [shownId, setShownId] = useState("");    // what they typed, for the welcome header
-
-  const checkUser = async (e) => {
-    if (e) e.preventDefault();
-    setErr("");
-    const raw = String(idInput||"").trim();
-    if (!raw) { setErr("Enter your email or username."); return; }
-    setBusy(true);
-    try {
-      const { usernames, dir, managed } = await loadPublicRoster();
-      const managedMsg = "Your hours are entered by the office manager — you don't need to log in here.";
-      let email = "", real = false;
-      if (raw.includes("@")) {
-        // email login: must match a current employee's email on file
-        const lc = raw.toLowerCase();
-        if (!Object.values(dir).some(v => v === lc)) {
-          setErr("That email isn't set up. Try your username, or ask the admin."); setBusy(false); return;
-        }
-        const owner = Object.keys(dir).find(k => dir[k] === lc);
-        if (owner && managed.includes(owner)) { setErr(managedMsg); setBusy(false); return; }
-        email = lc; real = true;
-      } else {
-        // username login: hard lockout to current employees, then resolve to the account email
-        const u = raw.toLowerCase();
-        if (Array.isArray(usernames) && !usernames.includes(u)) {
-          setErr("That username isn't set up. Ask the admin to add you."); setBusy(false); return;
-        }
-        if (managed.includes(u)) { setErr(managedMsg); setBusy(false); return; }
-        const r = dir[u];
-        if (r) { email = r; real = true; } else { email = npEmailFor(u); real = false; }
-      }
-      setResolvedEmail(email); setIsRealEmail(real); setShownId(raw);
-      const methods = await window._authfns.fetchSignInMethodsForEmail(window._auth, email);
-      setStage(methods && methods.length ? "signin" : "create");
-    } catch (ex) { setStage("signin"); }
-    finally { setBusy(false); }
-  };
-  const doSignIn = async (e) => {
-    if (e) e.preventDefault();
-    setErr(""); setBusy(true);
-    try { await window._authfns.signInWithEmailAndPassword(window._auth, resolvedEmail, pw); }
-    catch (ex) { setErr("Wrong password. Try again."); }
-    finally { setBusy(false); }
-  };
-  const doCreate = async (e) => {
-    if (e) e.preventDefault();
-    setErr("");
-    if (pw.length < 6) { setErr("Pick a password of at least 6 characters."); return; }
-    setBusy(true);
-    try { await window._authfns.createUserWithEmailAndPassword(window._auth, resolvedEmail, pw); showToast("Password set — you're in."); }
-    catch (ex) { setErr(ex && ex.code === "auth/email-already-in-use" ? "This login already has a password — go back and sign in." : "Couldn't set up your login."); }
-    finally { setBusy(false); }
-  };
-  const doReset = async () => {
-    setErr("");
-    if (!isRealEmail) { setErr("No email is on file for this login yet — ask the admin to reset it."); return; }
-    setBusy(true);
-    try { await window._authfns.sendPasswordResetEmail(window._auth, resolvedEmail); showToast("Reset link sent to " + resolvedEmail); }
-    catch (ex) { setErr("Couldn't send a reset link. Try again or ask the admin."); }
-    finally { setBusy(false); }
-  };
-
-  if (stage === "user") {
-    return (
-      <form onSubmit={checkUser}>
-        <h2>Staff Login</h2>
-        <p className="hint">Enter your email or username. First time? You'll set a password next.</p>
-        <label>Email or username</label>
-        <input type="text" autoComplete="username" value={idInput} onChange={e=>setIdInput(e.target.value)} placeholder="email or username" autoFocus />
-        {err && <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>{err}</div>}
-        <div style={{height:14}} />
-        <button type="submit" className="btn btn-primary" style={{width:"100%"}} disabled={busy}>{busy?"Checking…":"Continue"}</button>
-      </form>
-    );
-  }
-  const backBtn = (
-    <>
-      <div style={{height:8}} />
-      <button type="button" className="btn btn-ghost" style={{width:"100%"}} onClick={()=>{ setStage("user"); setPw(""); setErr(""); }}>Use a different login</button>
-    </>
-  );
-  if (stage === "signin") {
-    return (
-      <form onSubmit={doSignIn}>
-        <h2>Welcome back</h2>
-        <p className="hint">Signing in as <strong>{shownId}</strong>.</p>
-        <input type="text" autoComplete="username" value={resolvedEmail} readOnly style={{display:"none"}} />
-        <label>Password</label>
-        <input type="password" autoComplete="current-password" value={pw} onChange={e=>setPw(e.target.value)} autoFocus />
-        {err && <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>{err}</div>}
-        <div style={{height:14}} />
-        <button type="submit" className="btn btn-primary" style={{width:"100%"}} disabled={busy}>{busy?"Signing in…":"Sign in"}</button>
-        <div style={{height:8}} />
-        <button type="button" className="btn btn-ghost" style={{width:"100%", fontSize:13}} onClick={doReset} disabled={busy}>Forgot password?</button>
-        {backBtn}
-      </form>
-    );
-  }
-  return (
-    <form onSubmit={doCreate}>
-      <h2>Set your password</h2>
-      <p className="hint">First time for <strong>{shownId}</strong>. Choose a password (6+ characters) — your browser can save it.</p>
-      <input type="text" autoComplete="username" value={resolvedEmail} readOnly style={{display:"none"}} />
-      <label>New password</label>
-      <input type="password" autoComplete="new-password" value={pw} onChange={e=>setPw(e.target.value)} autoFocus />
-      {err && <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>{err}</div>}
-      <div style={{height:14}} />
-      <button type="submit" className="btn btn-primary" style={{width:"100%"}} disabled={busy}>{busy?"Setting up…":"Set password & sign in"}</button>
-      {backBtn}
-    </form>
-  );
-}
-
-function OwnerLogin({ showToast }) {
+// Unified login (2026-07-27): everyone signs in with their email + password; the app routes
+// owner vs. staff after sign-in via isOwnerUser. No username→email directory exists, so no
+// staff emails are exposed publicly. New logins are created admin-side (signup is disabled);
+// first access is via "Forgot password", which mails a reset link to the real email.
+function EmailLogin({ showToast }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const submit = async (e) => {
     if (e) e.preventDefault();
-    setErr(""); setBusy(true);
-    try {
-      const cred = await window._authfns.signInWithEmailAndPassword(window._auth, email.trim(), pw);
-      if (!isOwnerUser(cred.user)) { await window._authfns.signOut(window._auth); setErr("That account isn't an admin."); }
-    } catch (ex) { setErr("Wrong email or password."); }
+    setErr("");
+    const em = String(email||"").trim().toLowerCase();
+    if (!em || !em.includes("@")) { setErr("Enter the email your account is set up with."); return; }
+    setBusy(true);
+    try { await window._authfns.signInWithEmailAndPassword(window._auth, em, pw); }
+    catch (ex) { setErr("Wrong email or password. New here? Use “Forgot password” or ask the admin."); }
+    finally { setBusy(false); }
+  };
+  const reset = async () => {
+    setErr("");
+    const em = String(email||"").trim().toLowerCase();
+    if (!em || !em.includes("@")) { setErr("Enter your email first, then tap “Forgot password”."); return; }
+    setBusy(true);
+    try { await window._authfns.sendPasswordResetEmail(window._auth, em); showToast("If that email has an account, a reset link is on its way."); }
+    catch (ex) { setErr("Couldn’t send a reset link. Check the email or ask the admin."); }
     finally { setBusy(false); }
   };
   return (
     <form onSubmit={submit}>
-      <h2>Admin sign in</h2>
-      <p className="hint">For pay rates and the full roll-up. Your browser can save this.</p>
+      <h2>Sign in</h2>
+      <p className="hint">Enter your email and password. Your browser can save these.</p>
       <label>Email</label>
       <input type="email" autoComplete="username" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" autoFocus />
       <div style={{height:12}} />
@@ -1213,10 +1094,11 @@ function OwnerLogin({ showToast }) {
       {err && <div className="fixed-note" style={{color:"var(--danger)", marginTop:8}}>{err}</div>}
       <div style={{height:14}} />
       <button type="submit" className="btn btn-primary" style={{width:"100%"}} disabled={busy}>{busy?"Signing in…":"Sign in"}</button>
+      <div style={{height:8}} />
+      <button type="button" className="btn btn-ghost" style={{width:"100%", fontSize:13}} onClick={reset} disabled={busy}>Forgot password?</button>
     </form>
   );
 }
-
 /* ---------- entry view ---------- */
 function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, manualUnlocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, ptoStartDate, onRequestPto, onCancelPto }) {
   const [ptoOpen, setPtoOpen] = useState(false);

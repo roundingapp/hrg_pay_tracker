@@ -357,17 +357,16 @@ async function savePublicUsernames(list) {
   }
 }
 async function savePublicRoster(employees) {
-  const value = [], dir = {}, managed = [];
+  const value = [], managed = [];
   for (const e of employees) {
     const u = String(e.username || "").trim().toLowerCase();
     if (!u) continue;
     value.push(u);
-    dir[u] = String(e.email || "").trim().toLowerCase();
     if (e.managedBy) managed.push(u);
   }
   try {
     const ref = window._fs.doc(window._db, "public", "usernames");
-    await window._fs.setDoc(ref, { value, dir, managed });
+    await window._fs.setDoc(ref, { value, managed });
     return true;
   } catch (e) {
     console.error("roster write failed", e);
@@ -970,145 +969,9 @@ function App() {
   )), /* @__PURE__ */ React.createElement("div", { className: "toast" + (toast ? " show" : "") }, toast));
 }
 function LoginScreen({ showToast }) {
-  const [mode, setMode] = useState("np");
-  return /* @__PURE__ */ React.createElement("div", { className: "card lock-screen" }, mode === "np" ? /* @__PURE__ */ React.createElement(NPLogin, { showToast }) : /* @__PURE__ */ React.createElement(OwnerLogin, { showToast }), /* @__PURE__ */ React.createElement("div", { style: { height: 14 } }), /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      className: "btn btn-ghost",
-      style: { width: "100%", fontSize: 13 },
-      onClick: () => setMode(mode === "np" ? "owner" : "np")
-    },
-    mode === "np" ? "Admin" : "Back to staff sign in"
-  ));
+  return /* @__PURE__ */ React.createElement("div", { className: "card lock-screen" }, /* @__PURE__ */ React.createElement(EmailLogin, { showToast }));
 }
-function NPLogin({ showToast }) {
-  const [idInput, setIdInput] = useState("");
-  const [pw, setPw] = useState("");
-  const [stage, setStage] = useState("user");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [resolvedEmail, setResolvedEmail] = useState("");
-  const [isRealEmail, setIsRealEmail] = useState(false);
-  const [shownId, setShownId] = useState("");
-  const checkUser = async (e) => {
-    if (e) e.preventDefault();
-    setErr("");
-    const raw = String(idInput || "").trim();
-    if (!raw) {
-      setErr("Enter your email or username.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const { usernames, dir, managed } = await loadPublicRoster();
-      const managedMsg = "Your hours are entered by the office manager \u2014 you don't need to log in here.";
-      let email = "", real = false;
-      if (raw.includes("@")) {
-        const lc = raw.toLowerCase();
-        if (!Object.values(dir).some((v) => v === lc)) {
-          setErr("That email isn't set up. Try your username, or ask the admin.");
-          setBusy(false);
-          return;
-        }
-        const owner = Object.keys(dir).find((k) => dir[k] === lc);
-        if (owner && managed.includes(owner)) {
-          setErr(managedMsg);
-          setBusy(false);
-          return;
-        }
-        email = lc;
-        real = true;
-      } else {
-        const u = raw.toLowerCase();
-        if (Array.isArray(usernames) && !usernames.includes(u)) {
-          setErr("That username isn't set up. Ask the admin to add you.");
-          setBusy(false);
-          return;
-        }
-        if (managed.includes(u)) {
-          setErr(managedMsg);
-          setBusy(false);
-          return;
-        }
-        const r = dir[u];
-        if (r) {
-          email = r;
-          real = true;
-        } else {
-          email = npEmailFor(u);
-          real = false;
-        }
-      }
-      setResolvedEmail(email);
-      setIsRealEmail(real);
-      setShownId(raw);
-      const methods = await window._authfns.fetchSignInMethodsForEmail(window._auth, email);
-      setStage(methods && methods.length ? "signin" : "create");
-    } catch (ex) {
-      setStage("signin");
-    } finally {
-      setBusy(false);
-    }
-  };
-  const doSignIn = async (e) => {
-    if (e) e.preventDefault();
-    setErr("");
-    setBusy(true);
-    try {
-      await window._authfns.signInWithEmailAndPassword(window._auth, resolvedEmail, pw);
-    } catch (ex) {
-      setErr("Wrong password. Try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
-  const doCreate = async (e) => {
-    if (e) e.preventDefault();
-    setErr("");
-    if (pw.length < 6) {
-      setErr("Pick a password of at least 6 characters.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await window._authfns.createUserWithEmailAndPassword(window._auth, resolvedEmail, pw);
-      showToast("Password set \u2014 you're in.");
-    } catch (ex) {
-      setErr(ex && ex.code === "auth/email-already-in-use" ? "This login already has a password \u2014 go back and sign in." : "Couldn't set up your login.");
-    } finally {
-      setBusy(false);
-    }
-  };
-  const doReset = async () => {
-    setErr("");
-    if (!isRealEmail) {
-      setErr("No email is on file for this login yet \u2014 ask the admin to reset it.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await window._authfns.sendPasswordResetEmail(window._auth, resolvedEmail);
-      showToast("Reset link sent to " + resolvedEmail);
-    } catch (ex) {
-      setErr("Couldn't send a reset link. Try again or ask the admin.");
-    } finally {
-      setBusy(false);
-    }
-  };
-  if (stage === "user") {
-    return /* @__PURE__ */ React.createElement("form", { onSubmit: checkUser }, /* @__PURE__ */ React.createElement("h2", null, "Staff Login"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Enter your email or username. First time? You'll set a password next."), /* @__PURE__ */ React.createElement("label", null, "Email or username"), /* @__PURE__ */ React.createElement("input", { type: "text", autoComplete: "username", value: idInput, onChange: (e) => setIdInput(e.target.value), placeholder: "email or username", autoFocus: true }), err && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 8 } }, err), /* @__PURE__ */ React.createElement("div", { style: { height: 14 } }), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn btn-primary", style: { width: "100%" }, disabled: busy }, busy ? "Checking\u2026" : "Continue"));
-  }
-  const backBtn = /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 8 } }), /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn btn-ghost", style: { width: "100%" }, onClick: () => {
-    setStage("user");
-    setPw("");
-    setErr("");
-  } }, "Use a different login"));
-  if (stage === "signin") {
-    return /* @__PURE__ */ React.createElement("form", { onSubmit: doSignIn }, /* @__PURE__ */ React.createElement("h2", null, "Welcome back"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Signing in as ", /* @__PURE__ */ React.createElement("strong", null, shownId), "."), /* @__PURE__ */ React.createElement("input", { type: "text", autoComplete: "username", value: resolvedEmail, readOnly: true, style: { display: "none" } }), /* @__PURE__ */ React.createElement("label", null, "Password"), /* @__PURE__ */ React.createElement("input", { type: "password", autoComplete: "current-password", value: pw, onChange: (e) => setPw(e.target.value), autoFocus: true }), err && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 8 } }, err), /* @__PURE__ */ React.createElement("div", { style: { height: 14 } }), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn btn-primary", style: { width: "100%" }, disabled: busy }, busy ? "Signing in\u2026" : "Sign in"), /* @__PURE__ */ React.createElement("div", { style: { height: 8 } }), /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn btn-ghost", style: { width: "100%", fontSize: 13 }, onClick: doReset, disabled: busy }, "Forgot password?"), backBtn);
-  }
-  return /* @__PURE__ */ React.createElement("form", { onSubmit: doCreate }, /* @__PURE__ */ React.createElement("h2", null, "Set your password"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "First time for ", /* @__PURE__ */ React.createElement("strong", null, shownId), ". Choose a password (6+ characters) \u2014 your browser can save it."), /* @__PURE__ */ React.createElement("input", { type: "text", autoComplete: "username", value: resolvedEmail, readOnly: true, style: { display: "none" } }), /* @__PURE__ */ React.createElement("label", null, "New password"), /* @__PURE__ */ React.createElement("input", { type: "password", autoComplete: "new-password", value: pw, onChange: (e) => setPw(e.target.value), autoFocus: true }), err && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 8 } }, err), /* @__PURE__ */ React.createElement("div", { style: { height: 14 } }), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn btn-primary", style: { width: "100%" }, disabled: busy }, busy ? "Setting up\u2026" : "Set password & sign in"), backBtn);
-}
-function OwnerLogin({ showToast }) {
+function EmailLogin({ showToast }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1116,20 +979,38 @@ function OwnerLogin({ showToast }) {
   const submit = async (e) => {
     if (e) e.preventDefault();
     setErr("");
+    const em = String(email || "").trim().toLowerCase();
+    if (!em || !em.includes("@")) {
+      setErr("Enter the email your account is set up with.");
+      return;
+    }
     setBusy(true);
     try {
-      const cred = await window._authfns.signInWithEmailAndPassword(window._auth, email.trim(), pw);
-      if (!isOwnerUser(cred.user)) {
-        await window._authfns.signOut(window._auth);
-        setErr("That account isn't an admin.");
-      }
+      await window._authfns.signInWithEmailAndPassword(window._auth, em, pw);
     } catch (ex) {
-      setErr("Wrong email or password.");
+      setErr("Wrong email or password. New here? Use \u201CForgot password\u201D or ask the admin.");
     } finally {
       setBusy(false);
     }
   };
-  return /* @__PURE__ */ React.createElement("form", { onSubmit: submit }, /* @__PURE__ */ React.createElement("h2", null, "Admin sign in"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "For pay rates and the full roll-up. Your browser can save this."), /* @__PURE__ */ React.createElement("label", null, "Email"), /* @__PURE__ */ React.createElement("input", { type: "email", autoComplete: "username", value: email, onChange: (e) => setEmail(e.target.value), placeholder: "you@example.com", autoFocus: true }), /* @__PURE__ */ React.createElement("div", { style: { height: 12 } }), /* @__PURE__ */ React.createElement("label", null, "Password"), /* @__PURE__ */ React.createElement("input", { type: "password", autoComplete: "current-password", value: pw, onChange: (e) => setPw(e.target.value) }), err && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 8 } }, err), /* @__PURE__ */ React.createElement("div", { style: { height: 14 } }), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn btn-primary", style: { width: "100%" }, disabled: busy }, busy ? "Signing in\u2026" : "Sign in"));
+  const reset = async () => {
+    setErr("");
+    const em = String(email || "").trim().toLowerCase();
+    if (!em || !em.includes("@")) {
+      setErr("Enter your email first, then tap \u201CForgot password\u201D.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await window._authfns.sendPasswordResetEmail(window._auth, em);
+      showToast("If that email has an account, a reset link is on its way.");
+    } catch (ex) {
+      setErr("Couldn\u2019t send a reset link. Check the email or ask the admin.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return /* @__PURE__ */ React.createElement("form", { onSubmit: submit }, /* @__PURE__ */ React.createElement("h2", null, "Sign in"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Enter your email and password. Your browser can save these."), /* @__PURE__ */ React.createElement("label", null, "Email"), /* @__PURE__ */ React.createElement("input", { type: "email", autoComplete: "username", value: email, onChange: (e) => setEmail(e.target.value), placeholder: "you@example.com", autoFocus: true }), /* @__PURE__ */ React.createElement("div", { style: { height: 12 } }), /* @__PURE__ */ React.createElement("label", null, "Password"), /* @__PURE__ */ React.createElement("input", { type: "password", autoComplete: "current-password", value: pw, onChange: (e) => setPw(e.target.value) }), err && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 8 } }, err), /* @__PURE__ */ React.createElement("div", { style: { height: 14 } }), /* @__PURE__ */ React.createElement("button", { type: "submit", className: "btn btn-primary", style: { width: "100%" }, disabled: busy }, busy ? "Signing in\u2026" : "Sign in"), /* @__PURE__ */ React.createElement("div", { style: { height: 8 } }), /* @__PURE__ */ React.createElement("button", { type: "button", className: "btn btn-ghost", style: { width: "100%", fontSize: 13 }, onClick: reset, disabled: busy }, "Forgot password?"));
 }
 function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLocks, manualUnlocks, showToast, audit, baseSalary, empAdj, pto, ptoAllowance, ptoStartDate, onRequestPto, onCancelPto }) {
   const [ptoOpen, setPtoOpen] = useState(false);
