@@ -273,7 +273,7 @@
   import { getFirestore, initializeFirestore, doc, getDoc, getDocFromServer, setDoc, collection, getDocs, getDocsFromServer, onSnapshot,
            persistentLocalCache, persistentMultipleTabManager }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-  import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail, sendPasswordResetEmail }
+  import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
   // ↓↓↓↓↓  REPLACE EVERYTHING BETWEEN THE BRACES WITH YOUR OWN CONFIG  ↓↓↓↓↓
@@ -299,7 +299,7 @@
   });
   window._fs = { doc, getDoc, setDoc, collection, getDocs, onSnapshot };
   window._auth = getAuth(app);
-  window._authfns = { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, fetchSignInMethodsForEmail, sendPasswordResetEmail };
+  window._authfns = { onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail };
   window._firebaseReady = true;
   window.dispatchEvent(new Event("firebase-ready"));
 </script>
@@ -314,6 +314,6 @@
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"
   integrity="sha384-HZZ/fukV+9G8gwTNjN7zQDG0Sp7MsZy5DDN6VfY3Be7V9dvQpEpR2jF2HlyFUUjU" crossorigin="anonymous"></script>
 
-<script defer src="app.js?v=05c4a06e"></script>
+<script defer src="app.js?v=000dcf73"></script>
 </body>
 </html>

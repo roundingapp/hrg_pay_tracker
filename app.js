@@ -622,7 +622,7 @@ function App() {
       const owner = isOwnerUser(u);
       const [emps, locks, unlocks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2, myPto, everyPto, adminPto] = await Promise.all([
         loadVisibleRoster(u.uid),
-        // owner/manager: full roster; NP: own mirror
+        // owner: full roster; everyone else (incl. managers): own mirror
         sGet("manualLocks", []),
         sGet("manualUnlocks", []),
         owner ? loadAllEntries() : loadEntriesForUid(u.uid),

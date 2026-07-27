@@ -329,8 +329,9 @@ async function saveMyAdj(uid, map) {
 }
 
 // ---- per-person mirror (2026-07-27): each staffer's OWN scoped roster + admin PTO live on
-// their own doc, so regular NPs never read the owner-only shared roster/ptoAdmin. Owner and
-// managers still read the shared docs directly (the rules allow it); NPs fall back to these.
+// their own doc, so nobody but the owner reads the shared roster/ptoAdmin. Rules make those
+// docs OWNER-ONLY — managers included (a manager's mirror carries self + managed staff);
+// everyone who isn't the owner falls back to their mirror.
 async function loadMyRoster(uid) {
   try {
     const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker_entries", uid));
@@ -351,8 +352,9 @@ async function saveMyMirror(uid, roster, adminPto, isManager) {
     return true;
   } catch (e) { console.error("mirror write failed", e); return false; }
 }
-// Try the shared roster first (owner + managers are allowed); a regular NP is denied and
-// silently falls back to their own mirrored record. Quiet catch so NPs don't log errors.
+// Try the shared roster first (only the owner passes — rules are owner-only, managers too);
+// everyone else is denied and silently falls back to their own mirrored record (which for a
+// manager includes their managed staff). Quiet catch so non-owners don't log errors.
 async function loadVisibleRoster(uid) {
   try {
     const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker", "employees"));
@@ -693,7 +695,7 @@ function App() {
       const owner = isOwnerUser(u);
       // fire every read at once (they're independent) — was 8 sequential round-trips
       const [emps, locks, unlocks, entries, certs, salaries, mySalary, adjustments, myAdj, myPto, everyPto, adminPto] = await Promise.all([
-        loadVisibleRoster(u.uid),        // owner/manager: full roster; NP: own mirror
+        loadVisibleRoster(u.uid),        // owner: full roster; everyone else (incl. managers): own mirror
         sGet("manualLocks", []),
         sGet("manualUnlocks", []),
         owner ? loadAllEntries() : loadEntriesForUid(u.uid),
