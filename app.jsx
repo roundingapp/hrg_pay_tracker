@@ -1097,7 +1097,7 @@ function App() {
       {/* signed in as staff/manager → scoped entry screen */}
       {authUser && !isOwner && (
         !myEmp
-          ? <div className="card"><div className="empty">You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees &amp; rates, then sign out and back in.</div></div>
+          ? <div className="card"><div className="empty">You're signed in, but your account isn't in the roster yet. Ask the owner to add your email in Employees &amp; rates, then sign out and back in.</div></div>
           : myEmp.isManager
             ? <ManagerView manager={myEmp} employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} manualUnlocks={manualUnlocks} showToast={showToast} />
             : myEmp.managedBy
@@ -1320,8 +1320,8 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
           showToast && showToast(ok === false ? "⚠ Couldn't submit your PTO request — try again" : "PTO request submitted"); }} />}
       <h2>{noPayTypes ? "Your pay" : "Log your work"}</h2>
       <p className="hint">{noPayTypes
-        ? <>Signed in as <strong>{emp.name}</strong>{normU(emp.username) ? <> (@{normU(emp.username)})</> : null}. You're salaried — there's nothing to log day-to-day.</>
-        : <>Logging as <strong>{emp.name}</strong> (@{normU(emp.username)}). Tap a day below to add or edit it.</>}</p>
+        ? <>Signed in as <strong>{emp.name}</strong>. You're salaried — there's nothing to log day-to-day.</>
+        : <>Logging as <strong>{emp.name}</strong>. Tap a day below to add or edit it.</>}</p>
       {ptoEnabled && (
         <div className="pto-line">
           {approvedPto.length > 0 && <div className="pto-status">Approved PTO: {ptoFmt(approvedPto)}</div>}
@@ -2128,7 +2128,8 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     if (Number(emp.annualSalary) > 0) bits.push("$" + Math.round(Number(emp.annualSalary)/1000) + "k");
     if (emp.role && String(emp.role).trim()) bits.unshift(String(emp.role).trim());
     const noLogin = emp.salaryOnly;
-    return { user: noLogin ? "no login" : (u ? "@"+u : "needs username"), right: bits.length ? bits.join(" · ") : "no pay set", warn: !noLogin && !u };
+    const em = String(emp.email||"").trim();
+    return { user: noLogin ? "no login" : (em || "needs email"), right: bits.length ? bits.join(" · ") : "no pay set", warn: !noLogin && !em };
   };
   // validate the roster → {clean} or {error}
   const buildClean = (source) => {
@@ -2139,11 +2140,10 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     // a blank name BLOCKS the save (it just waits) rather than dropping that person
     const noName = kept.find(e => !e.name.trim());
     if (noName) return { error: "Every person needs a name — finish typing and it'll save." };
-    // username required for everyone who logs in (salary-only people don't)
-    const missing = kept.find(e => !e.salaryOnly && !normU(e.username));
-    if (missing) return { error: "Add a username for " + missing.name.trim() + " (or mark them salary-only)" };
-    const seen = {};
-    for (const e of kept) { const u = normU(e.username); if (!u) continue; if (seen[u]) return { error: 'Username "'+u+'" is used twice — make it unique' }; seen[u] = true; }
+    // email required for everyone who signs in (it's their login identity now); salary-only and
+    // manager-/admin-entered people don't sign in themselves, so they don't need one.
+    const missing = kept.find(e => !e.salaryOnly && !e.managedBy && !String(e.email||"").trim());
+    if (missing) return { error: "Add an email for " + missing.name.trim() + " — that's their login (or mark them salary-only)" };
     const seenE = {};
     for (const e of kept) { const em = String(e.email||"").trim().toLowerCase(); if (!em) continue; if (seenE[em]) return { error: 'Email "'+em+'" is used by two people — make it unique' }; seenE[em] = true; }
     const salariesMap = {};
@@ -2188,7 +2188,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   return (
     <div className="card">
       <h2>Employees &amp; pay rates</h2>
-      <p className="hint">Give each person a unique username — that's what they type to log entries. Consults ($60) and follow-ups ($30) are fixed; toggle eligibility per person. Set variable rates below — leave a field blank or 0 and that pay type won't appear in their entry screen.</p>
+      <p className="hint">Each person signs in with their email. Consults ($60) and follow-ups ($30) are fixed; toggle eligibility per person. Set variable rates below — leave a field blank or 0 and that pay type won't appear in their entry screen.</p>
 
       <div className="add-emp">
         <input type="text" placeholder="Add employee name…" value={newName}
@@ -2240,16 +2240,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                 {!emp.salaryOnly && (
                   <div className="field-row" style={{marginTop:12}}>
                     <div>
-                      <label>Username</label>
-                      <input type="text" value={emp.username ?? ""} autoComplete="off" placeholder="e.g. tiffany"
-                        onChange={e=>setUsername(emp.id, e.target.value)}
-                        style={emp.username && draft.filter(x=>normU(x.username)===normU(emp.username)).length>1 ? {borderColor:"var(--danger)"} : null} />
-                      {emp.username && draft.filter(x=>normU(x.username)===normU(emp.username)).length>1 && (
-                        <div className="fixed-note" style={{color:"var(--danger)", marginTop:4}}>Duplicate username.</div>
-                      )}
-                    </div>
-                    <div>
-                      <label>Email</label>
+                      <label>Email (their sign-in)</label>
                       <input type="email" value={emp.email ?? ""} autoComplete="off" placeholder="name@houstonrenal.com"
                         onChange={e=>setEmail(emp.id, e.target.value)} />
                     </div>

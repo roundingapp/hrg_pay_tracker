@@ -1020,7 +1020,7 @@ function App() {
       onRefresh: refresh,
       showToast
     }
-  ), authUser && !isOwner && (!myEmp ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "You're signed in, but your username isn't in the roster yet. Ask the owner to add you in Employees & rates, then sign out and back in.")) : myEmp.isManager ? /* @__PURE__ */ React.createElement(ManagerView, { manager: myEmp, employees, entries, upsertEntry, manualLocks, manualUnlocks, showToast }) : myEmp.managedBy ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "Your hours are entered for you \u2014 there's nothing to log here. Reach out to the office if something looks off.")) : /* @__PURE__ */ React.createElement(
+  ), authUser && !isOwner && (!myEmp ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "You're signed in, but your account isn't in the roster yet. Ask the owner to add your email in Employees & rates, then sign out and back in.")) : myEmp.isManager ? /* @__PURE__ */ React.createElement(ManagerView, { manager: myEmp, employees, entries, upsertEntry, manualLocks, manualUnlocks, showToast }) : myEmp.managedBy ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "Your hours are entered for you \u2014 there's nothing to log here. Reach out to the office if something looks off.")) : /* @__PURE__ */ React.createElement(
     EntryView,
     {
       emp: myEmp,
@@ -1244,7 +1244,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
         showToast && showToast(ok === false ? "\u26A0 Couldn't submit your PTO request \u2014 try again" : "PTO request submitted");
       }
     }
-  ), /* @__PURE__ */ React.createElement("h2", null, noPayTypes ? "Your pay" : "Log your work"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, noPayTypes ? /* @__PURE__ */ React.createElement(React.Fragment, null, "Signed in as ", /* @__PURE__ */ React.createElement("strong", null, emp.name), normU(emp.username) ? /* @__PURE__ */ React.createElement(React.Fragment, null, " (@", normU(emp.username), ")") : null, ". You're salaried \u2014 there's nothing to log day-to-day.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Logging as ", /* @__PURE__ */ React.createElement("strong", null, emp.name), " (@", normU(emp.username), "). Tap a day below to add or edit it.")), ptoEnabled && /* @__PURE__ */ React.createElement("div", { className: "pto-line" }, approvedPto.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "pto-status" }, "Approved PTO: ", ptoFmt(approvedPto)), requestedPto.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "pto-status pending" }, "Requested PTO: ", ptoFmt(requestedPto), " \xB7 pending"), /* @__PURE__ */ React.createElement("a", { className: "pto-link", onClick: () => setPtoOpen(true) }, "Request PTO")), emp && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 22 } }), /* @__PURE__ */ React.createElement("div", { className: "period-nav" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
+  ), /* @__PURE__ */ React.createElement("h2", null, noPayTypes ? "Your pay" : "Log your work"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, noPayTypes ? /* @__PURE__ */ React.createElement(React.Fragment, null, "Signed in as ", /* @__PURE__ */ React.createElement("strong", null, emp.name), ". You're salaried \u2014 there's nothing to log day-to-day.") : /* @__PURE__ */ React.createElement(React.Fragment, null, "Logging as ", /* @__PURE__ */ React.createElement("strong", null, emp.name), ". Tap a day below to add or edit it.")), ptoEnabled && /* @__PURE__ */ React.createElement("div", { className: "pto-line" }, approvedPto.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "pto-status" }, "Approved PTO: ", ptoFmt(approvedPto)), requestedPto.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "pto-status pending" }, "Requested PTO: ", ptoFmt(requestedPto), " \xB7 pending"), /* @__PURE__ */ React.createElement("a", { className: "pto-link", onClick: () => setPtoOpen(true) }, "Request PTO")), emp && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 22 } }), /* @__PURE__ */ React.createElement("div", { className: "period-nav" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
     flushEntry();
     setPeriodIdx((i) => i - 1);
   }, "aria-label": "Previous pay period" }, "\u2039"), /* @__PURE__ */ React.createElement("div", { className: "pn-label" }, fmtShortYr(period.start), " \u2013 ", fmtShortYr(period.end)), /* @__PURE__ */ React.createElement("button", { onClick: () => {
@@ -1831,22 +1831,16 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     if (Number(emp.annualSalary) > 0) bits.push("$" + Math.round(Number(emp.annualSalary) / 1e3) + "k");
     if (emp.role && String(emp.role).trim()) bits.unshift(String(emp.role).trim());
     const noLogin = emp.salaryOnly;
-    return { user: noLogin ? "no login" : u ? "@" + u : "needs username", right: bits.length ? bits.join(" \xB7 ") : "no pay set", warn: !noLogin && !u };
+    const em = String(emp.email || "").trim();
+    return { user: noLogin ? "no login" : em || "needs email", right: bits.length ? bits.join(" \xB7 ") : "no pay set", warn: !noLogin && !em };
   };
   const buildClean = (source) => {
     const hasContent = (e) => e.name.trim() || normU(e.username) || String(e.email || "").trim() || e.salaryOnly || e.isManager || e.managedBy || Number(e.annualSalary) > 0 || e.rates && Object.values(e.rates).some((v) => Number(v) > 0);
     const kept = source.filter(hasContent);
     const noName = kept.find((e) => !e.name.trim());
     if (noName) return { error: "Every person needs a name \u2014 finish typing and it'll save." };
-    const missing = kept.find((e) => !e.salaryOnly && !normU(e.username));
-    if (missing) return { error: "Add a username for " + missing.name.trim() + " (or mark them salary-only)" };
-    const seen = {};
-    for (const e of kept) {
-      const u = normU(e.username);
-      if (!u) continue;
-      if (seen[u]) return { error: 'Username "' + u + '" is used twice \u2014 make it unique' };
-      seen[u] = true;
-    }
+    const missing = kept.find((e) => !e.salaryOnly && !e.managedBy && !String(e.email || "").trim());
+    if (missing) return { error: "Add an email for " + missing.name.trim() + " \u2014 that's their login (or mark them salary-only)" };
     const seenE = {};
     for (const e of kept) {
       const em = String(e.email || "").trim().toLowerCase();
@@ -1919,7 +1913,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     return () => clearTimeout(id);
   }, [dirty, draft]);
   const blockReason = dirty ? buildClean(draft).error || null : null;
-  return /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("h2", null, "Employees & pay rates"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Give each person a unique username \u2014 that's what they type to log entries. Consults ($60) and follow-ups ($30) are fixed; toggle eligibility per person. Set variable rates below \u2014 leave a field blank or 0 and that pay type won't appear in their entry screen."), /* @__PURE__ */ React.createElement("div", { className: "add-emp" }, /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("h2", null, "Employees & pay rates"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Each person signs in with their email. Consults ($60) and follow-ups ($30) are fixed; toggle eligibility per person. Set variable rates below \u2014 leave a field blank or 0 and that pay type won't appear in their entry screen."), /* @__PURE__ */ React.createElement("div", { className: "add-emp" }, /* @__PURE__ */ React.createElement(
     "input",
     {
       type: "text",
@@ -1941,17 +1935,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
         autoComplete: "off",
         onChange: (e) => setRole(emp.id, e.target.value)
       }
-    ))), !emp.salaryOnly && /* @__PURE__ */ React.createElement("div", { className: "field-row", style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Username"), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "text",
-        value: emp.username ?? "",
-        autoComplete: "off",
-        placeholder: "e.g. tiffany",
-        onChange: (e) => setUsername(emp.id, e.target.value),
-        style: emp.username && draft.filter((x) => normU(x.username) === normU(emp.username)).length > 1 ? { borderColor: "var(--danger)" } : null
-      }
-    ), emp.username && draft.filter((x) => normU(x.username) === normU(emp.username)).length > 1 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { color: "var(--danger)", marginTop: 4 } }, "Duplicate username.")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Email"), /* @__PURE__ */ React.createElement(
+    ))), !emp.salaryOnly && /* @__PURE__ */ React.createElement("div", { className: "field-row", style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Email (their sign-in)"), /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "email",
