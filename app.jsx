@@ -4,6 +4,12 @@ const { useState, useEffect, useCallback, useRef } = React;
 const OWNER_EMAILS = ["sutaria.neil@gmail.com", "ssutaria@houstonrenal.com"];
 const NP_EMAIL_DOMAIN = "hrg-np.local";
 const isOwnerUser = (u) => !!u && OWNER_EMAILS.includes(String(u.email||"").toLowerCase());
+// Delegated PTO approver(s), pinned by immutable auth UID. The REAL gate is isPtoAdmin() in
+// firestore.rules (backups repo) — keep the two lists in sync (+ backfill-mirrors.mjs). This
+// list only routes the UI; never gate it on a roster flag (staff can write their own mirror,
+// so a self-set flag would show the tab — the rules pin is what makes that harmless).
+const PTO_ADMIN_UIDS = ["Odu03cw8WqTjcDxrIEeg1SIOacq2"];   // Samantha Herman (2026-08-19)
+const isPtoAdminUid = (uid) => !!uid && PTO_ADMIN_UIDS.includes(uid);
 // NPs log in with a username; map it to a fixed internal email for Firebase Auth
 const npEmailFor = (username) => String(username||"").trim().toLowerCase().replace(/[^a-z0-9._-]/g,"") + "@" + NP_EMAIL_DOMAIN;
 const FIXED = [
@@ -371,15 +377,21 @@ async function loadVisibleAdminPto(uid) {
   } catch (e) {}
   return await loadMyAdminPto(uid);
 }
-// the records a given employee may see: their own + (managers) the staff they manage.
-function scopedRosterFor(emp, all) {
+// the records a given employee may see: their own + (managers) the staff they manage +
+// (the PTO approver) everyone — but non-self rows stripped to what the Time off tab needs:
+// name/allowance/start date only, never rates/emails/caps/salary. No undefined values
+// (Firestore rejects them on write).
+const ptoRosterRow = (s) => { const o = { id: s.id, name: s.name, salaryOnly: !!s.salaryOnly }; if (s.ptoDays != null) o.ptoDays = s.ptoDays; if (s.startDate) o.startDate = s.startDate; return o; };
+function scopedRosterFor(emp, all, ptoApprover) {
   if (!emp) return [];
   const out = [emp];
   if (emp.isManager) for (const s of (all || [])) if (s && s.managedBy === emp.id) out.push(s);
+  if (ptoApprover) for (const s of (all || [])) if (s && !out.some(x => x.id === s.id)) out.push(ptoRosterRow(s));
   return out;
 }
-function scopedAdminPtoFor(emp, all, ptoAdmin) {
+function scopedAdminPtoFor(emp, all, ptoAdmin, ptoApprover) {
   if (!emp) return {};
+  if (ptoApprover) return { ...(ptoAdmin || {}) };
   const ids = new Set([emp.id]);
   if (emp.isManager) for (const s of (all || [])) if (s && s.managedBy === emp.id) ids.add(s.id);
   const out = {};
@@ -705,7 +717,7 @@ function App() {
         owner ? loadAdjustments() : Promise.resolve({}),
         owner ? Promise.resolve({}) : loadMyAdj(u.uid),
         loadPto(u.uid),                                  // the user's own PTO (owner has one too)
-        owner ? loadAllPto() : Promise.resolve([]),      // owner: everyone's PTO
+        (owner || isPtoAdminUid(u.uid)) ? loadAllPto() : Promise.resolve([]),   // owner + PTO approver: everyone's PTO
         loadVisibleAdminPto(u.uid),                      // owner: all admin PTO; NP: own scoped mirror
       ]);
       // only touch state that actually changed — an unchanged pull must not re-render, because
@@ -808,7 +820,7 @@ function App() {
       // roster/PTO mirrors: give everyone their own scoped view so NPs need not read the shared docs
       for (const e of (employees || [])) {
         const docId = uidOf(e.id);
-        if (docId) await saveMyMirror(docId, scopedRosterFor(e, employees), scopedAdminPtoFor(e, employees, ptoAdmin), !!e.isManager);
+        if (docId) await saveMyMirror(docId, scopedRosterFor(e, employees, isPtoAdminUid(docId)), scopedAdminPtoFor(e, employees, ptoAdmin, isPtoAdminUid(docId)), !!e.isManager);
       }
     })().catch(() => {});
   }, [isOwner, entries, salaries, adjustments, allPto, employees, ptoAdmin]);
@@ -822,7 +834,7 @@ function App() {
     for (const e of next) {
       const docId = resolveUidForEmp(e.id, entries);
       if (docId && !String(docId).startsWith("emp_"))
-        await saveMyMirror(docId, scopedRosterFor(e, next), scopedAdminPtoFor(e, next, ptoAdmin), !!e.isManager);
+        await saveMyMirror(docId, scopedRosterFor(e, next, isPtoAdminUid(docId)), scopedAdminPtoFor(e, next, ptoAdmin, isPtoAdminUid(docId)), !!e.isManager);
     }
   }, [entries, ptoAdmin]);
   // mirrors only go to REAL login docs (never legacy emp_-keyed docs staff can't read)
@@ -852,7 +864,7 @@ function App() {
       if (docId) await saveMyAdj(docId, perPeriod);
     }
   }, [mirrorTarget]);
-  // owner approves (status→approved) or denies (removes) PTO requests.
+  // owner or the delegated PTO approver approves (status→approved) or denies (removes) PTO requests.
   // items = [{_uid, id}] for self-requested records, [{_admin:true, empId, id}] for admin-entered.
   const setPtoStatus = useCallback(async (items, newStatus) => {
     const adminItems = items.filter(it => it._admin);
@@ -860,12 +872,14 @@ function App() {
     const byUid = {};
     for (const it of regItems) (byUid[it._uid] = byUid[it._uid] || []).push(it.id);
     const now = new Date().toISOString();
+    // audit: with approval delegated, record WHO acted (email of the signed-in approver)
+    const whoBy = String((window._auth && window._auth.currentUser && window._auth.currentUser.email) || "admin").toLowerCase();
     const approvedRecs = [];   // (empId, date) of newly approved — to dedupe vs admin-entered
     for (const [docId, ids] of Object.entries(byUid)) {
       const latest = await loadPto(docId);
       const next = newStatus === null
         ? latest.filter(r => !ids.includes(r.id))                                                   // deny = remove
-        : latest.map(r => ids.includes(r.id) ? { ...r, status: newStatus, approvedAt: now } : r);   // approve
+        : latest.map(r => ids.includes(r.id) ? { ...r, status: newStatus, approvedAt: now, approvedBy: whoBy } : r);   // approve
       if (newStatus === "approved") approvedRecs.push(...latest.filter(r => ids.includes(r.id)));
       await savePto(docId, next);
     }
@@ -897,7 +911,8 @@ function App() {
                            ...allPto.filter(r => r.empId === emp.id).map(r => r.date)]);
     const fresh = Object.entries(sel || {})
       .filter(([date]) => !taken.has(date))
-      .map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2,6), empId: emp.id, date, half: !!(v && v.half), status: "approved", approvedAt: now, by: "admin" }));
+      .map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2,6), empId: emp.id, date, half: !!(v && v.half), status: "approved", approvedAt: now,
+        by: String((window._auth && window._auth.currentUser && window._auth.currentUser.email) || "admin").toLowerCase() }));
     if (!fresh.length) return;
     map[emp.id] = [...list, ...fresh];
     await savePtoAdmin(map);
@@ -1094,19 +1109,31 @@ function App() {
           onViewAs={startImpersonate} syncedAt={syncedAt} onRefresh={refresh} showToast={showToast} />
       )}
 
-      {/* signed in as staff/manager → scoped entry screen */}
+      {/* signed in as staff/manager → scoped entry screen. The delegated PTO approver
+          additionally gets a "Time off" tab = the same PtoAdmin panel the owner uses
+          (her mirror roster carries everyone, PTO fields only — rules enforce the rest). */}
       {authUser && !isOwner && (
         !myEmp
           ? <div className="card"><div className="empty">You're signed in, but your account isn't in the roster yet. Ask the owner to add your email in Employees &amp; rates, then sign out and back in.</div></div>
-          : myEmp.isManager
-            ? <ManagerView manager={myEmp} employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} manualUnlocks={manualUnlocks} showToast={showToast} />
-            : myEmp.managedBy
-              ? <div className="card"><div className="empty">Your hours are entered for you — there's nothing to log here. Reach out to the office if something looks off.</div></div>
-              : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} manualUnlocks={manualUnlocks} baseSalary={mySalary} empAdj={myAdj}
-                  pto={myPtoMerged} ptoAllowance={myEmp && myEmp.ptoDays} ptoStartDate={myEmp && myEmp.startDate}
-                  onRequestPto={ptoEligible(myEmp) ? requestPto : undefined}
-                  onCancelPto={ptoEligible(myEmp) ? cancelPto : undefined}
-                  showToast={showToast} />
+          : <>
+              {isPtoAdminUid(uid) && (
+                <div className="tabs">
+                  <button className={"tab"+(tab!=="pto"?" active":"")} onClick={()=>setTab("entry")}>My pay</button>
+                  <button className={"tab"+(tab==="pto"?" active":"")} onClick={()=>setTab("pto")}>Time off{(() => { const n = allPtoMerged.filter(r=>r.status==="requested").length; return n ? " (" + n + ")" : ""; })()}</button>
+                </div>
+              )}
+              {isPtoAdminUid(uid) && tab==="pto"
+                ? <PtoAdmin employees={employees} allPto={allPtoMerged} onSetStatus={setPtoStatus} onAddPto={addPtoForEmployee} showToast={showToast} />
+                : myEmp.isManager
+                  ? <ManagerView manager={myEmp} employees={employees} entries={entries} upsertEntry={upsertEntry} manualLocks={manualLocks} manualUnlocks={manualUnlocks} showToast={showToast} />
+                  : myEmp.managedBy
+                    ? <div className="card"><div className="empty">Your hours are entered for you — there's nothing to log here. Reach out to the office if something looks off.</div></div>
+                    : <EntryView emp={myEmp} entries={entries} upsertEntry={upsertEntry} certs={certs} certifyPeriod={certifyPeriod} manualLocks={manualLocks} manualUnlocks={manualUnlocks} baseSalary={mySalary} empAdj={myAdj}
+                        pto={myPtoMerged} ptoAllowance={myEmp && myEmp.ptoDays} ptoStartDate={myEmp && myEmp.startDate}
+                        onRequestPto={ptoEligible(myEmp) ? requestPto : undefined}
+                        onCancelPto={ptoEligible(myEmp) ? cancelPto : undefined}
+                        showToast={showToast} />}
+            </>
       )}
 
       <div className={"toast"+(toast?" show":"")}>{toast}</div>

@@ -2,6 +2,8 @@ const { useState, useEffect, useCallback, useRef } = React;
 const OWNER_EMAILS = ["sutaria.neil@gmail.com", "ssutaria@houstonrenal.com"];
 const NP_EMAIL_DOMAIN = "hrg-np.local";
 const isOwnerUser = (u) => !!u && OWNER_EMAILS.includes(String(u.email || "").toLowerCase());
+const PTO_ADMIN_UIDS = ["Odu03cw8WqTjcDxrIEeg1SIOacq2"];
+const isPtoAdminUid = (uid) => !!uid && PTO_ADMIN_UIDS.includes(uid);
 const npEmailFor = (username) => String(username || "").trim().toLowerCase().replace(/[^a-z0-9._-]/g, "") + "@" + NP_EMAIL_DOMAIN;
 const FIXED = [
   { key: "consults", label: "Consults", rate: 60, unit: "ea" },
@@ -381,16 +383,26 @@ async function loadVisibleAdminPto(uid) {
   }
   return await loadMyAdminPto(uid);
 }
-function scopedRosterFor(emp, all) {
+const ptoRosterRow = (s) => {
+  const o = { id: s.id, name: s.name, salaryOnly: !!s.salaryOnly };
+  if (s.ptoDays != null) o.ptoDays = s.ptoDays;
+  if (s.startDate) o.startDate = s.startDate;
+  return o;
+};
+function scopedRosterFor(emp, all, ptoApprover) {
   if (!emp) return [];
   const out = [emp];
   if (emp.isManager) {
     for (const s of all || []) if (s && s.managedBy === emp.id) out.push(s);
   }
+  if (ptoApprover) {
+    for (const s of all || []) if (s && !out.some((x) => x.id === s.id)) out.push(ptoRosterRow(s));
+  }
   return out;
 }
-function scopedAdminPtoFor(emp, all, ptoAdmin) {
+function scopedAdminPtoFor(emp, all, ptoAdmin, ptoApprover) {
   if (!emp) return {};
+  if (ptoApprover) return { ...ptoAdmin || {} };
   const ids = /* @__PURE__ */ new Set([emp.id]);
   if (emp.isManager) {
     for (const s of all || []) if (s && s.managedBy === emp.id) ids.add(s.id);
@@ -633,8 +645,8 @@ function App() {
         owner ? Promise.resolve({}) : loadMyAdj(u.uid),
         loadPto(u.uid),
         // the user's own PTO (owner has one too)
-        owner ? loadAllPto() : Promise.resolve([]),
-        // owner: everyone's PTO
+        owner || isPtoAdminUid(u.uid) ? loadAllPto() : Promise.resolve([]),
+        // owner + PTO approver: everyone's PTO
         loadVisibleAdminPto(u.uid)
         // owner: all admin PTO; NP: own scoped mirror
       ]);
@@ -740,7 +752,7 @@ function App() {
       }
       for (const e of employees || []) {
         const docId = uidOf(e.id);
-        if (docId) await saveMyMirror(docId, scopedRosterFor(e, employees), scopedAdminPtoFor(e, employees, ptoAdmin), !!e.isManager);
+        if (docId) await saveMyMirror(docId, scopedRosterFor(e, employees, isPtoAdminUid(docId)), scopedAdminPtoFor(e, employees, ptoAdmin, isPtoAdminUid(docId)), !!e.isManager);
       }
     })().catch(() => {
     });
@@ -752,7 +764,7 @@ function App() {
     for (const e of next) {
       const docId = resolveUidForEmp(e.id, entries);
       if (docId && !String(docId).startsWith("emp_"))
-        await saveMyMirror(docId, scopedRosterFor(e, next), scopedAdminPtoFor(e, next, ptoAdmin), !!e.isManager);
+        await saveMyMirror(docId, scopedRosterFor(e, next, isPtoAdminUid(docId)), scopedAdminPtoFor(e, next, ptoAdmin, isPtoAdminUid(docId)), !!e.isManager);
     }
   }, [entries, ptoAdmin]);
   const mirrorTarget = useCallback((empId) => {
@@ -785,10 +797,11 @@ function App() {
     const byUid = {};
     for (const it of regItems) (byUid[it._uid] = byUid[it._uid] || []).push(it.id);
     const now = (/* @__PURE__ */ new Date()).toISOString();
+    const whoBy = String(window._auth && window._auth.currentUser && window._auth.currentUser.email || "admin").toLowerCase();
     const approvedRecs = [];
     for (const [docId, ids] of Object.entries(byUid)) {
       const latest = await loadPto(docId);
-      const next = newStatus === null ? latest.filter((r) => !ids.includes(r.id)) : latest.map((r) => ids.includes(r.id) ? { ...r, status: newStatus, approvedAt: now } : r);
+      const next = newStatus === null ? latest.filter((r) => !ids.includes(r.id)) : latest.map((r) => ids.includes(r.id) ? { ...r, status: newStatus, approvedAt: now, approvedBy: whoBy } : r);
       if (newStatus === "approved") approvedRecs.push(...latest.filter((r) => ids.includes(r.id)));
       await savePto(docId, next);
     }
@@ -813,7 +826,15 @@ function App() {
       ...list.map((r) => r.date),
       ...allPto.filter((r) => r.empId === emp.id).map((r) => r.date)
     ]);
-    const fresh = Object.entries(sel || {}).filter(([date]) => !taken.has(date)).map(([date, v]) => ({ id: "pto_" + date + "_" + Math.random().toString(36).slice(2, 6), empId: emp.id, date, half: !!(v && v.half), status: "approved", approvedAt: now, by: "admin" }));
+    const fresh = Object.entries(sel || {}).filter(([date]) => !taken.has(date)).map(([date, v]) => ({
+      id: "pto_" + date + "_" + Math.random().toString(36).slice(2, 6),
+      empId: emp.id,
+      date,
+      half: !!(v && v.half),
+      status: "approved",
+      approvedAt: now,
+      by: String(window._auth && window._auth.currentUser && window._auth.currentUser.email || "admin").toLowerCase()
+    }));
     if (!fresh.length) return;
     map[emp.id] = [...list, ...fresh];
     await savePtoAdmin(map);
@@ -1020,7 +1041,10 @@ function App() {
       onRefresh: refresh,
       showToast
     }
-  ), authUser && !isOwner && (!myEmp ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "You're signed in, but your account isn't in the roster yet. Ask the owner to add your email in Employees & rates, then sign out and back in.")) : myEmp.isManager ? /* @__PURE__ */ React.createElement(ManagerView, { manager: myEmp, employees, entries, upsertEntry, manualLocks, manualUnlocks, showToast }) : myEmp.managedBy ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "Your hours are entered for you \u2014 there's nothing to log here. Reach out to the office if something looks off.")) : /* @__PURE__ */ React.createElement(
+  ), authUser && !isOwner && (!myEmp ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "You're signed in, but your account isn't in the roster yet. Ask the owner to add your email in Employees & rates, then sign out and back in.")) : /* @__PURE__ */ React.createElement(React.Fragment, null, isPtoAdminUid(uid) && /* @__PURE__ */ React.createElement("div", { className: "tabs" }, /* @__PURE__ */ React.createElement("button", { className: "tab" + (tab !== "pto" ? " active" : ""), onClick: () => setTab("entry") }, "My pay"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (tab === "pto" ? " active" : ""), onClick: () => setTab("pto") }, "Time off", (() => {
+    const n = allPtoMerged.filter((r) => r.status === "requested").length;
+    return n ? " (" + n + ")" : "";
+  })())), isPtoAdminUid(uid) && tab === "pto" ? /* @__PURE__ */ React.createElement(PtoAdmin, { employees, allPto: allPtoMerged, onSetStatus: setPtoStatus, onAddPto: addPtoForEmployee, showToast }) : myEmp.isManager ? /* @__PURE__ */ React.createElement(ManagerView, { manager: myEmp, employees, entries, upsertEntry, manualLocks, manualUnlocks, showToast }) : myEmp.managedBy ? /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("div", { className: "empty" }, "Your hours are entered for you \u2014 there's nothing to log here. Reach out to the office if something looks off.")) : /* @__PURE__ */ React.createElement(
     EntryView,
     {
       emp: myEmp,
@@ -1039,7 +1063,7 @@ function App() {
       onCancelPto: ptoEligible(myEmp) ? cancelPto : void 0,
       showToast
     }
-  )), /* @__PURE__ */ React.createElement("div", { className: "toast" + (toast ? " show" : "") }, toast));
+  ))), /* @__PURE__ */ React.createElement("div", { className: "toast" + (toast ? " show" : "") }, toast));
 }
 function LoginScreen({ showToast }) {
   return /* @__PURE__ */ React.createElement("div", { className: "card lock-screen" }, /* @__PURE__ */ React.createElement(EmailLogin, { showToast }));
