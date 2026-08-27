@@ -149,6 +149,19 @@
   .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 560px) { .field-row { grid-template-columns: 1fr; } }
   .field-row > div { min-width: 0; }
+  /* stipend: amount + note + start date on ONE line */
+  .stipend-row { display: grid; grid-template-columns: 84px minmax(0,1fr) 132px; gap: 10px; align-items: center; }
+  .stipend-row input { min-width: 0; }
+  /* the native date control needs ~125px at 16px font (16px is required — anything smaller
+     auto-zooms iOS on focus); trimming its side padding buys back 12px so it fits 132px uncut */
+  .stipend-row input[type="date"] { padding-left: 6px; padding-right: 6px; }
+  /* Measured: at a 390px viewport this row's container is only 270px (.wrap 20 + .card 22 +
+     .emp-rate-block 16 padding, both sides), so three-up leaves the note ~34px — unreadable.
+     Under 560px the date takes its own full-width row: 2 rows, and the note gets the full width. */
+  @media (max-width: 560px) {
+    .stipend-row { grid-template-columns: 84px minmax(0,1fr); }
+    .stipend-row input[type="date"] { grid-column: 1 / -1; }
+  }
   .check-cluster { display: flex; flex-wrap: wrap; gap: 12px 22px; }
   .check-cluster label { display: flex; align-items: center; gap: 8px; cursor: pointer; margin: 0; font-weight: 500; color: var(--ink); }
   .check-cluster input { width: auto; margin: 0; flex: 0 0 auto; }
@@ -314,6 +327,6 @@
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"
   integrity="sha384-HZZ/fukV+9G8gwTNjN7zQDG0Sp7MsZy5DDN6VfY3Be7V9dvQpEpR2jF2HlyFUUjU" crossorigin="anonymous"></script>
 
-<script defer src="app.js?v=9a97fd2d"></script>
+<script defer src="app.js?v=13fa7f02"></script>
 </body>
 </html>

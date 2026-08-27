@@ -2038,24 +2038,32 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
         placeholder: "none",
         onChange: (e) => setCap(emp.id, e.target.value)
       }
-    ), Number(emp.patientCap) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, "Certifies once/period; changing it re-prompts."))), /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Stipend ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "$ / pay period")), /* @__PURE__ */ React.createElement(
+    ), Number(emp.patientCap) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, "Certifies once/period; changing it re-prompts."))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("label", null, "Stipend ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "$ / pay period \xB7 paid automatically")), /* @__PURE__ */ React.createElement("div", { className: "stipend-row", style: { gridTemplateColumns: Number(emp.stipend) > 0 ? void 0 : "84px minmax(0,1fr)" } }, /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "text",
         inputMode: "decimal",
         value: emp.stipend ?? "",
-        placeholder: "none",
+        placeholder: "$",
         onChange: (e) => setStipend(emp.id, e.target.value)
       }
-    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Stipend note ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "shows on their breakdown")), /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "text",
         value: emp.stipendNote ?? "",
-        placeholder: "e.g. Parking",
+        placeholder: "note \u2014 e.g. Parking",
         onChange: (e) => setStipendNote(emp.id, e.target.value)
       }
-    ))), Number(emp.stipend) > 0 && /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Stipend start ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "first period containing this date")), /* @__PURE__ */ React.createElement("input", { type: "date", value: emp.stipendStart || "", onChange: (e) => setStipendStart(emp.id, e.target.value) }), /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, "Paid automatically every pay period \xB7 shows in the roll-up and their own breakdown."))), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "rate-grid", style: { marginTop: 12 } }, VARIABLE.map((t) => /* @__PURE__ */ React.createElement("div", { className: "rate-field", key: t.key }, /* @__PURE__ */ React.createElement("label", null, t.label, " ($/", t.unit, ")"), /* @__PURE__ */ React.createElement(
+    ), Number(emp.stipend) > 0 && /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "date",
+        title: "Start \u2014 first period containing this date",
+        value: emp.stipendStart || "",
+        onChange: (e) => setStipendStart(emp.id, e.target.value)
+      }
+    ))), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "rate-grid", style: { marginTop: 12 } }, VARIABLE.map((t) => /* @__PURE__ */ React.createElement("div", { className: "rate-field", key: t.key }, /* @__PURE__ */ React.createElement("label", null, t.label, " ($/", t.unit, ")"), /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "number",

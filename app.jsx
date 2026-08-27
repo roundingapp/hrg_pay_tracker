@@ -2376,27 +2376,18 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                     </div>
                   )}
                 </div>
-                <div className="field-row">
-                  <div>
-                    <label>Stipend <span className="hint-sm">$ / pay period</span></label>
-                    <input type="text" inputMode="decimal" value={emp.stipend ?? ""} placeholder="none"
+                <div style={{marginTop:12}}>
+                  <label>Stipend <span className="hint-sm">$ / pay period · paid automatically</span></label>
+                  <div className="stipend-row" style={{gridTemplateColumns: Number(emp.stipend) > 0 ? undefined : "84px minmax(0,1fr)"}}>
+                    <input type="text" inputMode="decimal" value={emp.stipend ?? ""} placeholder="$"
                       onChange={e=>setStipend(emp.id, e.target.value)} />
-                  </div>
-                  <div>
-                    <label>Stipend note <span className="hint-sm">shows on their breakdown</span></label>
-                    <input type="text" value={emp.stipendNote ?? ""} placeholder="e.g. Parking"
+                    <input type="text" value={emp.stipendNote ?? ""} placeholder="note — e.g. Parking"
                       onChange={e=>setStipendNote(emp.id, e.target.value)} />
+                    {Number(emp.stipend) > 0 &&
+                      <input type="date" title="Start — first period containing this date" value={emp.stipendStart || ""}
+                        onChange={e=>setStipendStart(emp.id, e.target.value)} />}
                   </div>
                 </div>
-                {Number(emp.stipend) > 0 && (
-                  <div className="field-row">
-                    <div>
-                      <label>Stipend start <span className="hint-sm">first period containing this date</span></label>
-                      <input type="date" value={emp.stipendStart || ""} onChange={e=>setStipendStart(emp.id, e.target.value)} />
-                      <div className="fixed-note" style={{marginTop:4}}>Paid automatically every pay period · shows in the roll-up and their own breakdown.</div>
-                    </div>
-                  </div>
-                )}
                 {!emp.salaryOnly && !emp.isManager && (
                   <>
                     <div className="rate-grid" style={{marginTop:12}}>
