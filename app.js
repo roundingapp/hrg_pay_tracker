@@ -134,6 +134,12 @@ function periodList(back = 8, fwd = 2) {
   for (let i = c + fwd; i >= c - back; i--) out.push(periodByIndex(i));
   return out;
 }
+const stipendFor = (emp, period) => {
+  const amt = Number(emp && emp.stipend) || 0;
+  if (amt <= 0 || !period) return 0;
+  const s = emp.stipendStart;
+  return !s || s <= period.end ? amt : 0;
+};
 async function sGet(key, fallback) {
   try {
     const ref = window._fs.doc(window._db, "paytracker", key);
@@ -1152,6 +1158,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const periodAdj = empAdj && empAdj[String(periodIdx)] || {};
   const periodBonus = Number(periodAdj.bonus) || 0;
   const periodReimb = Number(periodAdj.reimbursement) || 0;
+  const periodStipend = emp ? stipendFor(emp, period) : 0;
   const periodLabel = fmtShortYr(period.start) + " \u2013 " + fmtShortYr(period.end);
   useEffect(() => {
     if (periodIndexFor(date) !== periodIdx) setDate(period.start);
@@ -1274,7 +1281,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   }, "aria-label": "Previous pay period" }, "\u2039"), /* @__PURE__ */ React.createElement("div", { className: "pn-label" }, fmtShortYr(period.start), " \u2013 ", fmtShortYr(period.end)), /* @__PURE__ */ React.createElement("button", { onClick: () => {
     flushEntry();
     setPeriodIdx((i) => Math.min(maxPeriodIdx, i + 1));
-  }, disabled: periodIdx >= maxPeriodIdx, "aria-label": "Next pay period" }, "\u203A")), /* @__PURE__ */ React.createElement("div", { className: "period-total" }, baseBiweekly > 0 || periodBonus > 0 || periodReimb > 0 ? /* @__PURE__ */ React.createElement("div", { className: "pay-breakdown" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Base"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(baseBiweekly))), (!noPayTypes || periodDollars > 0) && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Variable"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(periodDollars))), periodBonus > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Bonus"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(periodBonus))), periodReimb > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Reimbursement"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(periodReimb))), /* @__PURE__ */ React.createElement("div", { className: "pay-total" }, /* @__PURE__ */ React.createElement("span", null, "Total"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(baseBiweekly + periodDollars + periodBonus + periodReimb)))) : /* @__PURE__ */ React.createElement("span", null, "This period:", /* @__PURE__ */ React.createElement("span", { className: "pay", style: { marginLeft: 6 } }, money(periodDollars))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--muted)", marginTop: 4 } }, "Payday ", period.paydayLabel))), !noPayTypes && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 12 } }), /* @__PURE__ */ React.createElement("div", { className: "week-grid" }, DOW.map((d) => /* @__PURE__ */ React.createElement("div", { className: "dow", key: "dow-" + d }, d)), periodDays.map((iso) => {
+  }, disabled: periodIdx >= maxPeriodIdx, "aria-label": "Next pay period" }, "\u203A")), /* @__PURE__ */ React.createElement("div", { className: "period-total" }, baseBiweekly > 0 || periodBonus > 0 || periodReimb > 0 || periodStipend > 0 ? /* @__PURE__ */ React.createElement("div", { className: "pay-breakdown" }, baseBiweekly > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Base"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(baseBiweekly))), (!noPayTypes || periodDollars > 0) && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Variable"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(periodDollars))), periodBonus > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Bonus"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(periodBonus))), periodReimb > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, "Reimbursement"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(periodReimb))), periodStipend > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", null, emp && String(emp.stipendNote || "").trim() || "Stipend"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(periodStipend))), /* @__PURE__ */ React.createElement("div", { className: "pay-total" }, /* @__PURE__ */ React.createElement("span", null, "Total"), /* @__PURE__ */ React.createElement("span", { className: "pay" }, money(baseBiweekly + periodDollars + periodBonus + periodReimb + periodStipend)))) : /* @__PURE__ */ React.createElement("span", null, "This period:", /* @__PURE__ */ React.createElement("span", { className: "pay", style: { marginLeft: 6 } }, money(periodDollars))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--muted)", marginTop: 4 } }, "Payday ", period.paydayLabel))), !noPayTypes && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { height: 12 } }), /* @__PURE__ */ React.createElement("div", { className: "week-grid" }, DOW.map((d) => /* @__PURE__ */ React.createElement("div", { className: "dow", key: "dow-" + d }, d)), periodDays.map((iso) => {
     const logged = dayEntries(iso).length > 0;
     const locked = dateInLockedPeriod(iso, manualLocks, manualUnlocks);
     const future = iso > todayISO();
@@ -1516,6 +1523,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     const base = computedBase;
     const bonus = Number(adj.bonus) || 0;
     const reimb = Number(adj.reimbursement) || 0;
+    const stip = mode === "period" && !removed ? stipendFor(emp, selPeriod) : 0;
     const notes = adj.notes || "";
     return {
       emp,
@@ -1527,10 +1535,11 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
       variable,
       bonus,
       reimb,
+      stip,
       notes,
       other,
       otherAmt: other,
-      pay: base + variable + bonus + reimb,
+      pay: base + variable + bonus + reimb + stip,
       n: empEntries.length,
       otherNotes,
       removed
@@ -1550,10 +1559,11 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
   const totalVariable = rows.reduce((s, r) => s + r.variable, 0);
   const totalBonus = rows.reduce((s, r) => s + r.bonus, 0);
   const totalReimb = rows.reduce((s, r) => s + r.reimb, 0);
+  const totalStipend = rows.reduce((s, r) => s + r.stip, 0);
   const totalConsults = rows.reduce((s, r) => s + r.counts.consults, 0);
   const totalFollow = rows.reduce((s, r) => s + r.counts.followups, 0);
   const totalOther = rows.reduce((s, r) => s + r.otherAmt, 0);
-  const sortVal = (r, k) => k === "name" ? lastNameKey(r.emp.name) : k === "pay" ? r.pay : k === "base" ? r.base : k === "variable" ? r.variable : k === "bonus" ? r.bonus : k === "reimb" ? r.reimb : k === "other" ? r.otherAmt : r.counts[k] || 0;
+  const sortVal = (r, k) => k === "name" ? lastNameKey(r.emp.name) : k === "pay" ? r.pay : k === "base" ? r.base : k === "variable" ? r.variable : k === "bonus" ? r.bonus : k === "reimb" ? r.reimb : k === "stipend" ? r.stip : k === "other" ? r.otherAmt : r.counts[k] || 0;
   const sortedRows = sortKey ? [...rows].sort((a, b) => {
     const va = sortVal(a, sortKey), vb = sortVal(b, sortKey);
     const cmp = typeof va === "string" ? va.localeCompare(vb) : va - vb;
@@ -1701,7 +1711,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     const tot = dayTotal(iso);
     const cls = "day-cell" + (iso === dayDate ? " selected" : "") + (tot > 0 ? " logged" : "") + (iso === todayISO() ? " today" : "");
     return /* @__PURE__ */ React.createElement("div", { className: cls, key: iso, onClick: () => setDayDate(iso) }, /* @__PURE__ */ React.createElement("div", { className: "dnum" }, d), tot > 0 ? /* @__PURE__ */ React.createElement("div", { className: "damt" }, money(tot)) : /* @__PURE__ */ React.createElement("div", { className: "dempty" }, "\u2014"));
-  }))), lateEntries.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "card", style: { background: "var(--danger-soft)", border: "1px solid var(--danger)", marginBottom: 18, padding: "12px 16px" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "var(--danger)", fontWeight: 600, fontSize: 14 } }, "\u26A0 ", lateEntries.length, " late ", lateEntries.length === 1 ? "entry" : "entries", " added after this period locked"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "var(--danger)", marginTop: 4 } }, "These were logged after the lock cutoff and are included in the totals above. Review before paying \u2014 someone logged work for a period you may have already processed.")), /* @__PURE__ */ React.createElement("div", { className: "metric-grid" }, /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Total payout"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, money(grand))), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Consults"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalConsults)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Follow-ups"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalFollow)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Entries"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, filtered.length))), /* @__PURE__ */ React.createElement("div", { className: "scroll-x" }, /* @__PURE__ */ React.createElement("table", { className: "rollup-table" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, sortTh("name", "Employee"), sortTh("pay", "Pay", true), sortTh("base", "Base", true), sortTh("variable", "Variable", true), sortTh("bonus", "Bonus", true), sortTh("reimb", "Reimburse", true), sortTh("consults", "Cons", true), sortTh("followups", "F/U", true), sortTh("clinic_pts", "Clinic pts", true), sortTh("perdiem", "Per diem", true), sortTh("clinic_hr", "Clinic hr", true), sortTh("virtual_hr", "Virtual hr", true), sortTh("hosp_hr", "Hosp hr", true), sortTh("other", "Other", true), /* @__PURE__ */ React.createElement("th", { style: { whiteSpace: "nowrap" } }, "Notes"))), /* @__PURE__ */ React.createElement("tbody", null, sortedRows.map((r) => /* @__PURE__ */ React.createElement("tr", { key: r.emp.id }, /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, lastFirst(r.emp.name)), /* @__PURE__ */ React.createElement("td", { className: "num pay" }, money(r.pay)), /* @__PURE__ */ React.createElement("td", { className: "num" }, r.base ? money(r.base) : ""), ovCell(r, "variable", r.variable, "Variable"), ovCell(r, "bonus", r.bonus, "Bonus"), ovCell(r, "reimbursement", r.reimb, "Reimbursement"), cntCell(r, "consults", "Consults"), cntCell(r, "followups", "Follow-ups"), cntCell(r, "clinic_pts", "Clinic pts"), cntCell(r, "perdiem", "Per diem"), cntCell(r, "clinic_hr", "Clinic hr"), cntCell(r, "virtual_hr", "Virtual hr"), cntCell(r, "hosp_hr", "Hosp hr"), ovCell(r, "other", r.otherAmt, "Other"), /* @__PURE__ */ React.createElement("td", null, editable ? /* @__PURE__ */ React.createElement(
+  }))), lateEntries.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "card", style: { background: "var(--danger-soft)", border: "1px solid var(--danger)", marginBottom: 18, padding: "12px 16px" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "var(--danger)", fontWeight: 600, fontSize: 14 } }, "\u26A0 ", lateEntries.length, " late ", lateEntries.length === 1 ? "entry" : "entries", " added after this period locked"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "var(--danger)", marginTop: 4 } }, "These were logged after the lock cutoff and are included in the totals above. Review before paying \u2014 someone logged work for a period you may have already processed.")), /* @__PURE__ */ React.createElement("div", { className: "metric-grid" }, /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Total payout"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, money(grand))), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Consults"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalConsults)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Follow-ups"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalFollow)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Entries"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, filtered.length))), /* @__PURE__ */ React.createElement("div", { className: "scroll-x" }, /* @__PURE__ */ React.createElement("table", { className: "rollup-table" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, sortTh("name", "Employee"), sortTh("pay", "Pay", true), sortTh("base", "Base", true), sortTh("variable", "Variable", true), sortTh("bonus", "Bonus", true), sortTh("reimb", "Reimburse", true), sortTh("stipend", "Stipend", true), sortTh("consults", "Cons", true), sortTh("followups", "F/U", true), sortTh("clinic_pts", "Clinic pts", true), sortTh("perdiem", "Per diem", true), sortTh("clinic_hr", "Clinic hr", true), sortTh("virtual_hr", "Virtual hr", true), sortTh("hosp_hr", "Hosp hr", true), sortTh("other", "Other", true), /* @__PURE__ */ React.createElement("th", { style: { whiteSpace: "nowrap" } }, "Notes"))), /* @__PURE__ */ React.createElement("tbody", null, sortedRows.map((r) => /* @__PURE__ */ React.createElement("tr", { key: r.emp.id }, /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, lastFirst(r.emp.name)), /* @__PURE__ */ React.createElement("td", { className: "num pay" }, money(r.pay)), /* @__PURE__ */ React.createElement("td", { className: "num" }, r.base ? money(r.base) : ""), ovCell(r, "variable", r.variable, "Variable"), ovCell(r, "bonus", r.bonus, "Bonus"), ovCell(r, "reimbursement", r.reimb, "Reimbursement"), /* @__PURE__ */ React.createElement("td", { className: "num" }, r.stip ? money(r.stip) : ""), cntCell(r, "consults", "Consults"), cntCell(r, "followups", "Follow-ups"), cntCell(r, "clinic_pts", "Clinic pts"), cntCell(r, "perdiem", "Per diem"), cntCell(r, "clinic_hr", "Clinic hr"), cntCell(r, "virtual_hr", "Virtual hr"), cntCell(r, "hosp_hr", "Hosp hr"), ovCell(r, "other", r.otherAmt, "Other"), /* @__PURE__ */ React.createElement("td", null, editable ? /* @__PURE__ */ React.createElement(
     "input",
     {
       className: "cell-in notes-in",
@@ -1710,7 +1720,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
       value: r.adj.notes || "",
       onChange: (e) => setAdj(r.emp.id, "notes", e.target.value)
     }
-  ) : r.notes || ""))), /* @__PURE__ */ React.createElement("tr", { className: "total-row" }, /* @__PURE__ */ React.createElement("td", null, "Total"), /* @__PURE__ */ React.createElement("td", { className: "num pay" }, money(grand)), /* @__PURE__ */ React.createElement("td", { className: "num" }, totalBase ? money(totalBase) : ""), /* @__PURE__ */ React.createElement("td", { className: "num" }, totalVariable ? money(totalVariable) : ""), /* @__PURE__ */ React.createElement("td", { className: "num" }, totalBonus ? money(totalBonus) : ""), /* @__PURE__ */ React.createElement("td", { className: "num" }, totalReimb ? money(totalReimb) : ""), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.consults, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.followups, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.clinic_pts, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.perdiem, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.clinic_hr, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.virtual_hr, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.hosp_hr, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, totalOther ? money(totalOther) : ""), /* @__PURE__ */ React.createElement("td", null))))), rows.some((r) => r.otherNotes.length > 0) && /* @__PURE__ */ React.createElement("div", { className: "scroll-x", style: { marginTop: 18 } }, /* @__PURE__ */ React.createElement("label", { style: { marginBottom: 8 } }, "Other adjustments \u2014 explanations"), /* @__PURE__ */ React.createElement("table", null, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", null, "Date"), /* @__PURE__ */ React.createElement("th", null, "Employee"), /* @__PURE__ */ React.createElement("th", { className: "num" }, "Amount"), /* @__PURE__ */ React.createElement("th", null, "Explanation"))), /* @__PURE__ */ React.createElement("tbody", null, rows.flatMap((r) => r.otherNotes.map((o, i) => /* @__PURE__ */ React.createElement("tr", { key: r.emp.id + "-o" + i }, /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, fmtShortYr(o.date)), /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, lastFirst(r.emp.name)), /* @__PURE__ */ React.createElement("td", { className: "num pay" }, money(o.amount)), /* @__PURE__ */ React.createElement("td", null, o.note || "\u2014"))))))), /* @__PURE__ */ React.createElement("div", { className: "actions", style: { marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-primary", onClick: exportADP }, "Export ADP CSV"), mode === "period" && /* @__PURE__ */ React.createElement("span", { style: { alignSelf: "center", fontSize: 13, color: "var(--muted)" } }, "Period & payday auto-filled in the export.")));
+  ) : r.notes || ""))), /* @__PURE__ */ React.createElement("tr", { className: "total-row" }, /* @__PURE__ */ React.createElement("td", null, "Total"), /* @__PURE__ */ React.createElement("td", { className: "num pay" }, money(grand)), /* @__PURE__ */ React.createElement("td", { className: "num" }, totalBase ? money(totalBase) : ""), /* @__PURE__ */ React.createElement("td", { className: "num" }, totalVariable ? money(totalVariable) : ""), /* @__PURE__ */ React.createElement("td", { className: "num" }, totalBonus ? money(totalBonus) : ""), /* @__PURE__ */ React.createElement("td", { className: "num" }, totalReimb ? money(totalReimb) : ""), /* @__PURE__ */ React.createElement("td", { className: "num" }, totalStipend ? money(totalStipend) : ""), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.consults, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.followups, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.clinic_pts, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.perdiem, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.clinic_hr, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.virtual_hr, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, rows.reduce((s, r) => s + r.counts.hosp_hr, 0)), /* @__PURE__ */ React.createElement("td", { className: "num" }, totalOther ? money(totalOther) : ""), /* @__PURE__ */ React.createElement("td", null))))), rows.some((r) => r.otherNotes.length > 0) && /* @__PURE__ */ React.createElement("div", { className: "scroll-x", style: { marginTop: 18 } }, /* @__PURE__ */ React.createElement("label", { style: { marginBottom: 8 } }, "Other adjustments \u2014 explanations"), /* @__PURE__ */ React.createElement("table", null, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", null, "Date"), /* @__PURE__ */ React.createElement("th", null, "Employee"), /* @__PURE__ */ React.createElement("th", { className: "num" }, "Amount"), /* @__PURE__ */ React.createElement("th", null, "Explanation"))), /* @__PURE__ */ React.createElement("tbody", null, rows.flatMap((r) => r.otherNotes.map((o, i) => /* @__PURE__ */ React.createElement("tr", { key: r.emp.id + "-o" + i }, /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, fmtShortYr(o.date)), /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, lastFirst(r.emp.name)), /* @__PURE__ */ React.createElement("td", { className: "num pay" }, money(o.amount)), /* @__PURE__ */ React.createElement("td", null, o.note || "\u2014"))))))), /* @__PURE__ */ React.createElement("div", { className: "actions", style: { marginTop: 18 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-primary", onClick: exportADP }, "Export ADP CSV"), mode === "period" && /* @__PURE__ */ React.createElement("span", { style: { alignSelf: "center", fontSize: 13, color: "var(--muted)" } }, "Period & payday auto-filled in the export.")));
 }
 function Rates({ employees, salaries, persistEmployees, persistSalaries, showToast }) {
   const [draft, setDraft] = useState(() => mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salaries));
@@ -1826,6 +1836,19 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map((e) => e.id === id ? { ...e, startDate: val } : e));
     markDirty();
   };
+  const setStipend = (id, val) => {
+    if (val !== "" && !/^\d*\.?\d*$/.test(val)) return;
+    setDraft(draft.map((e) => e.id === id ? { ...e, stipend: val } : e));
+    markDirty();
+  };
+  const setStipendNote = (id, val) => {
+    setDraft(draft.map((e) => e.id === id ? { ...e, stipendNote: val } : e));
+    markDirty();
+  };
+  const setStipendStart = (id, val) => {
+    setDraft(draft.map((e) => e.id === id ? { ...e, stipendStart: val } : e));
+    markDirty();
+  };
   const setSalaryOnly = (id, val) => {
     setDraft(draft.map((e) => e.id === id ? { ...e, salaryOnly: val, isManager: val ? false : e.isManager, managedBy: "", fixedEligible: val ? false : e.fixedEligible } : e));
     markDirty();
@@ -1853,13 +1876,14 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       if (emp.managedBy) bits.push(emp.managedBy === "ADMIN" ? "admin-entered" : "manager-entered");
     }
     if (Number(emp.annualSalary) > 0) bits.push("$" + Math.round(Number(emp.annualSalary) / 1e3) + "k");
+    if (Number(emp.stipend) > 0) bits.push("$" + Number(emp.stipend) + "/period " + String(emp.stipendNote || "stipend").toLowerCase());
     if (emp.role && String(emp.role).trim()) bits.unshift(String(emp.role).trim());
     const noLogin = emp.salaryOnly;
     const em = String(emp.email || "").trim();
     return { user: noLogin ? "no login" : em || "needs email", right: bits.length ? bits.join(" \xB7 ") : "no pay set", warn: !noLogin && !em };
   };
   const buildClean = (source) => {
-    const hasContent = (e) => e.name.trim() || normU(e.username) || String(e.email || "").trim() || e.salaryOnly || e.isManager || e.managedBy || Number(e.annualSalary) > 0 || e.rates && Object.values(e.rates).some((v) => Number(v) > 0);
+    const hasContent = (e) => e.name.trim() || normU(e.username) || String(e.email || "").trim() || e.salaryOnly || e.isManager || e.managedBy || Number(e.annualSalary) > 0 || Number(e.stipend) > 0 || e.rates && Object.values(e.rates).some((v) => Number(v) > 0);
     const kept = source.filter(hasContent);
     const noName = kept.find((e) => !e.name.trim());
     if (noName) return { error: "Every person needs a name \u2014 finish typing and it'll save." };
@@ -1902,6 +1926,18 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       else delete out.ptoDays;
       if (/^\d{4}-\d{2}-\d{2}$/.test(String(e.startDate || ""))) out.startDate = e.startDate;
       else delete out.startDate;
+      const st = Number(e.stipend);
+      if (st > 0) {
+        out.stipend = Math.round(st * 100) / 100;
+        out.stipendStart = /^\d{4}-\d{2}-\d{2}$/.test(String(e.stipendStart || "")) ? e.stipendStart : todayISO();
+        const sn = String(e.stipendNote || "").trim();
+        if (sn) out.stipendNote = sn;
+        else delete out.stipendNote;
+      } else {
+        delete out.stipend;
+        delete out.stipendStart;
+        delete out.stipendNote;
+      }
       if (out.isManager) {
         delete out.managedBy;
       } else if (!e.salaryOnly) {
@@ -1995,7 +2031,24 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
         placeholder: "none",
         onChange: (e) => setCap(emp.id, e.target.value)
       }
-    ), Number(emp.patientCap) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, "Certifies once/period; changing it re-prompts."))), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "rate-grid", style: { marginTop: 12 } }, VARIABLE.map((t) => /* @__PURE__ */ React.createElement("div", { className: "rate-field", key: t.key }, /* @__PURE__ */ React.createElement("label", null, t.label, " ($/", t.unit, ")"), /* @__PURE__ */ React.createElement(
+    ), Number(emp.patientCap) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, "Certifies once/period; changing it re-prompts."))), /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Stipend ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "$ / pay period")), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        inputMode: "decimal",
+        value: emp.stipend ?? "",
+        placeholder: "none",
+        onChange: (e) => setStipend(emp.id, e.target.value)
+      }
+    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Stipend note ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "shows on their breakdown")), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        value: emp.stipendNote ?? "",
+        placeholder: "e.g. Parking",
+        onChange: (e) => setStipendNote(emp.id, e.target.value)
+      }
+    ))), Number(emp.stipend) > 0 && /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Stipend start ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "first period containing this date")), /* @__PURE__ */ React.createElement("input", { type: "date", value: emp.stipendStart || "", onChange: (e) => setStipendStart(emp.id, e.target.value) }), /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, "Paid automatically every pay period \xB7 shows in the roll-up and their own breakdown."))), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "rate-grid", style: { marginTop: 12 } }, VARIABLE.map((t) => /* @__PURE__ */ React.createElement("div", { className: "rate-field", key: t.key }, /* @__PURE__ */ React.createElement("label", null, t.label, " ($/", t.unit, ")"), /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "number",

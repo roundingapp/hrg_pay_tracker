@@ -154,6 +154,13 @@ function periodList(back = 8, fwd = 2) {
   for (let i = c + fwd; i >= c - back; i--) out.push(periodByIndex(i));
   return out; // newest first
 }
+// recurring per-period stipend (employees-doc fields: stipend, stipendNote, stipendStart)
+const stipendFor = (emp, period) => {
+  const amt = Number(emp && emp.stipend) || 0;
+  if (amt <= 0 || !period) return 0;
+  const s = emp.stipendStart;
+  return (!s || s <= period.end) ? amt : 0;
+};
 
 /* ---------- storage layer (Firebase Firestore) ----------
    Stores two documents in collection "paytracker":
@@ -1244,6 +1251,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const periodAdj = (empAdj && empAdj[String(periodIdx)]) || {};   // this period's bonus / reimbursement
   const periodBonus = Number(periodAdj.bonus) || 0;
   const periodReimb = Number(periodAdj.reimbursement) || 0;
+  const periodStipend = emp ? stipendFor(emp, period) : 0;        // recurring per-period stipend
   const periodLabel = fmtShortYr(period.start) + " – " + fmtShortYr(period.end);
 
   // when navigating to another period, pull the selected day into that period
@@ -1367,16 +1375,19 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
               <button onClick={()=>{ flushEntry(); setPeriodIdx(i=>Math.min(maxPeriodIdx, i+1)); }} disabled={periodIdx>=maxPeriodIdx} aria-label="Next pay period">›</button>
             </div>
             <div className="period-total">
-              {(baseBiweekly > 0 || periodBonus > 0 || periodReimb > 0)
+              {(baseBiweekly > 0 || periodBonus > 0 || periodReimb > 0 || periodStipend > 0)
                 ? <div className="pay-breakdown">
-                    <div><span>Base</span><span className="pay">{money(baseBiweekly)}</span></div>
+                    {/* a stipend-only person (no salary) must not see a dead "Base $0.00" row */}
+                    {baseBiweekly > 0 &&
+                      <div><span>Base</span><span className="pay">{money(baseBiweekly)}</span></div>}
                     {/* salary-only staff have no variable pay — don't show a dead $0.00 row
                         (still shown if a legacy period has real logged dollars) */}
                     {(!noPayTypes || periodDollars > 0) &&
                       <div><span>Variable</span><span className="pay">{money(periodDollars)}</span></div>}
                     {periodBonus > 0 && <div><span>Bonus</span><span className="pay">{money(periodBonus)}</span></div>}
                     {periodReimb > 0 && <div><span>Reimbursement</span><span className="pay">{money(periodReimb)}</span></div>}
-                    <div className="pay-total"><span>Total</span><span className="pay">{money(baseBiweekly + periodDollars + periodBonus + periodReimb)}</span></div>
+                    {periodStipend > 0 && <div><span>{(emp && String(emp.stipendNote||"").trim()) || "Stipend"}</span><span className="pay">{money(periodStipend)}</span></div>}
+                    <div className="pay-total"><span>Total</span><span className="pay">{money(baseBiweekly + periodDollars + periodBonus + periodReimb + periodStipend)}</span></div>
                   </div>
                 : <span>This period:<span className="pay" style={{marginLeft:6}}>{money(periodDollars)}</span></span>}
               <div style={{fontSize:12, color:"var(--muted)", marginTop:4}}>Payday {period.paydayLabel}</div>
@@ -1682,9 +1693,11 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     const base = computedBase;   // Base is read-only in the roll-up (salary ÷ 26) — change it in Employees & rates
     const bonus = Number(adj.bonus) || 0;
     const reimb = Number(adj.reimbursement) || 0;
+    // recurring stipend: Pay-period view only (like Base), never for removed staff
+    const stip = (mode === "period" && !removed) ? stipendFor(emp, selPeriod) : 0;
     const notes = adj.notes || "";
-    return { emp, adj, computedCounts, computedOther, counts, base, variable, bonus, reimb, notes, other, otherAmt: other,
-      pay: base + variable + bonus + reimb, n: empEntries.length, otherNotes, removed };
+    return { emp, adj, computedCounts, computedOther, counts, base, variable, bonus, reimb, stip, notes, other, otherAmt: other,
+      pay: base + variable + bonus + reimb + stip, n: empEntries.length, otherNotes, removed };
   };
   const rows = employees.map(emp => buildRow(emp, filtered.filter(e => e.empId === emp.id), false));
   // include entries from staff who have since been removed (orphaned but still recorded/owed)
@@ -1700,13 +1713,14 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
   const totalVariable = rows.reduce((s,r)=>s+r.variable,0);
   const totalBonus = rows.reduce((s,r)=>s+r.bonus,0);
   const totalReimb = rows.reduce((s,r)=>s+r.reimb,0);
+  const totalStipend = rows.reduce((s,r)=>s+r.stip,0);
   const totalConsults = rows.reduce((s,r)=>s+r.counts.consults,0);
   const totalFollow = rows.reduce((s,r)=>s+r.counts.followups,0);
   const totalOther = rows.reduce((s,r)=>s+r.otherAmt,0);
 
   // sortable roll-up table: click a header to sort (asc → desc → back to roster order)
   const sortVal = (r, k) => k==="name" ? lastNameKey(r.emp.name)
-    : k==="pay" ? r.pay : k==="base" ? r.base : k==="variable" ? r.variable : k==="bonus" ? r.bonus : k==="reimb" ? r.reimb : k==="other" ? r.otherAmt : (r.counts[k]||0);
+    : k==="pay" ? r.pay : k==="base" ? r.base : k==="variable" ? r.variable : k==="bonus" ? r.bonus : k==="reimb" ? r.reimb : k==="stipend" ? r.stip : k==="other" ? r.otherAmt : (r.counts[k]||0);
   const sortedRows = sortKey
     ? [...rows].sort((a,b) => { const va=sortVal(a,sortKey), vb=sortVal(b,sortKey);
         const cmp = typeof va==="string" ? va.localeCompare(vb) : (va-vb); return sortDir==="asc"?cmp:-cmp; })
@@ -1946,6 +1960,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
               {sortTh("pay", "Pay", true)}
               {sortTh("base", "Base", true)}{sortTh("variable", "Variable", true)}
               {sortTh("bonus", "Bonus", true)}{sortTh("reimb", "Reimburse", true)}
+              {sortTh("stipend", "Stipend", true)}
               {sortTh("consults", "Cons", true)}{sortTh("followups", "F/U", true)}
               {sortTh("clinic_pts", "Clinic pts", true)}
               {sortTh("perdiem", "Per diem", true)}
@@ -1963,6 +1978,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
                 {ovCell(r, "variable", r.variable, "Variable")}
                 {ovCell(r, "bonus", r.bonus, "Bonus")}
                 {ovCell(r, "reimbursement", r.reimb, "Reimbursement")}
+                <td className="num">{r.stip ? money(r.stip) : ""}</td>
                 {cntCell(r, "consults", "Consults")}
                 {cntCell(r, "followups", "Follow-ups")}
                 {cntCell(r, "clinic_pts", "Clinic pts")}
@@ -1984,6 +2000,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
               <td className="num">{totalVariable ? money(totalVariable) : ""}</td>
               <td className="num">{totalBonus ? money(totalBonus) : ""}</td>
               <td className="num">{totalReimb ? money(totalReimb) : ""}</td>
+              <td className="num">{totalStipend ? money(totalStipend) : ""}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.consults,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.followups,0)}</td>
               <td className="num">{rows.reduce((s,r)=>s+r.counts.clinic_pts,0)}</td>
@@ -2132,6 +2149,19 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map(e => e.id===id ? {...e, startDate: val} : e));   // YYYY-MM-DD; anniversary for PTO reset
     markDirty();
   };
+  const setStipend = (id, val) => {
+    if (val !== "" && !/^\d*\.?\d*$/.test(val)) return;   // dollars, cents allowed
+    setDraft(draft.map(e => e.id===id ? {...e, stipend: val} : e));
+    markDirty();
+  };
+  const setStipendNote = (id, val) => {
+    setDraft(draft.map(e => e.id===id ? {...e, stipendNote: val} : e));
+    markDirty();
+  };
+  const setStipendStart = (id, val) => {
+    setDraft(draft.map(e => e.id===id ? {...e, stipendStart: val} : e));   // YYYY-MM-DD; first period containing it
+    markDirty();
+  };
   const setSalaryOnly = (id, val) => {
     setDraft(draft.map(e => e.id===id ? {...e, salaryOnly: val, isManager: val ? false : e.isManager, managedBy: "", fixedEligible: val ? false : e.fixedEligible} : e));
     markDirty();
@@ -2153,6 +2183,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       if (emp.managedBy) bits.push(emp.managedBy === "ADMIN" ? "admin-entered" : "manager-entered");
     }
     if (Number(emp.annualSalary) > 0) bits.push("$" + Math.round(Number(emp.annualSalary)/1000) + "k");
+    if (Number(emp.stipend) > 0) bits.push("$" + Number(emp.stipend) + "/period " + String(emp.stipendNote || "stipend").toLowerCase());
     if (emp.role && String(emp.role).trim()) bits.unshift(String(emp.role).trim());
     const noLogin = emp.salaryOnly;
     const em = String(emp.email||"").trim();
@@ -2162,7 +2193,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   const buildClean = (source) => {
     // Keep any row with real content, so clearing a name to retype never DELETES the person.
     // Only an entirely-empty row (an abandoned "Add employee") is dropped.
-    const hasContent = (e) => e.name.trim() || normU(e.username) || String(e.email||"").trim() || e.salaryOnly || e.isManager || e.managedBy || Number(e.annualSalary) > 0 || (e.rates && Object.values(e.rates).some(v => Number(v) > 0));
+    const hasContent = (e) => e.name.trim() || normU(e.username) || String(e.email||"").trim() || e.salaryOnly || e.isManager || e.managedBy || Number(e.annualSalary) > 0 || Number(e.stipend) > 0 || (e.rates && Object.values(e.rates).some(v => Number(v) > 0));
     const kept = source.filter(hasContent);
     // a blank name BLOCKS the save (it just waits) rather than dropping that person
     const noName = kept.find(e => !e.name.trim());
@@ -2189,6 +2220,15 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       const pto = Number(e.ptoDays);
       if (pto > 0) out.ptoDays = pto; else delete out.ptoDays;   // annual PTO allowance (supports half days)
       if (/^\d{4}-\d{2}-\d{2}$/.test(String(e.startDate||""))) out.startDate = e.startDate; else delete out.startDate;   // PTO reset anniversary
+      // recurring per-period stipend (e.g. parking). Start date defaults to today so already-paid
+      // past periods never change retroactively.
+      const st = Number(e.stipend);
+      if (st > 0) {
+        out.stipend = Math.round(st * 100) / 100;
+        out.stipendStart = /^\d{4}-\d{2}-\d{2}$/.test(String(e.stipendStart||"")) ? e.stipendStart : todayISO();
+        const sn = String(e.stipendNote||"").trim();
+        if (sn) out.stipendNote = sn; else delete out.stipendNote;
+      } else { delete out.stipend; delete out.stipendStart; delete out.stipendNote; }
       if (out.isManager) { delete out.managedBy; } else if (!e.salaryOnly) { if (e.managedBy) out.managedBy = String(e.managedBy); else delete out.managedBy; }
       return out;
     });
@@ -2321,6 +2361,27 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                     </div>
                   )}
                 </div>
+                <div className="field-row">
+                  <div>
+                    <label>Stipend <span className="hint-sm">$ / pay period</span></label>
+                    <input type="text" inputMode="decimal" value={emp.stipend ?? ""} placeholder="none"
+                      onChange={e=>setStipend(emp.id, e.target.value)} />
+                  </div>
+                  <div>
+                    <label>Stipend note <span className="hint-sm">shows on their breakdown</span></label>
+                    <input type="text" value={emp.stipendNote ?? ""} placeholder="e.g. Parking"
+                      onChange={e=>setStipendNote(emp.id, e.target.value)} />
+                  </div>
+                </div>
+                {Number(emp.stipend) > 0 && (
+                  <div className="field-row">
+                    <div>
+                      <label>Stipend start <span className="hint-sm">first period containing this date</span></label>
+                      <input type="date" value={emp.stipendStart || ""} onChange={e=>setStipendStart(emp.id, e.target.value)} />
+                      <div className="fixed-note" style={{marginTop:4}}>Paid automatically every pay period · shows in the roll-up and their own breakdown.</div>
+                    </div>
+                  </div>
+                )}
                 {!emp.salaryOnly && !emp.isManager && (
                   <>
                     <div className="rate-grid" style={{marginTop:12}}>
