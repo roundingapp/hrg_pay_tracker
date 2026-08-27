@@ -818,8 +818,14 @@ function App() {
       }
       const byEmp = {};
       for (const [pIdx, perEmp] of Object.entries(adjustments || {}))
-        for (const [empId, a] of Object.entries(perEmp || {}))
-          (byEmp[empId] = byEmp[empId] || {})[pIdx] = { bonus: Number(a.bonus)||0, reimbursement: Number(a.reimbursement)||0 };
+        for (const [empId, a] of Object.entries(perEmp || {})) {
+          const m = { bonus: Number(a.bonus)||0, reimbursement: Number(a.reimbursement)||0 };
+          // per-period stipend OVERRIDE — mirror it only when the adjustment actually carries one.
+          // Absence means "fall back to the recurring computed stipend", so never default this to 0:
+          // that would wipe the computed stipend from the breakdown of anyone with a bonus/reimb.
+          if (a.stipend != null && a.stipend !== "") m.stipend = Number(a.stipend)||0;
+          (byEmp[empId] = byEmp[empId] || {})[pIdx] = m;
+        }
       for (const [empId, perPeriod] of Object.entries(byEmp)) {
         const docId = uidOf(empId);
         if (docId) await saveMyAdj(docId, perPeriod);
@@ -862,10 +868,16 @@ function App() {
     setAdjustments(map);
     await saveAdjustments(map);
     // mirror each person's own bonus/reimbursement into their doc so they see it in their breakdown
-    const byEmp = {};   // {empId: {periodIdx: {bonus, reimbursement}}}
+    const byEmp = {};   // {empId: {periodIdx: {bonus, reimbursement, stipend?}}}
     for (const [pIdx, perEmp] of Object.entries(map || {}))
-      for (const [empId, a] of Object.entries(perEmp || {}))
-        (byEmp[empId] = byEmp[empId] || {})[pIdx] = { bonus: Number(a.bonus)||0, reimbursement: Number(a.reimbursement)||0 };
+      for (const [empId, a] of Object.entries(perEmp || {})) {
+        const m = { bonus: Number(a.bonus)||0, reimbursement: Number(a.reimbursement)||0 };
+        // per-period stipend OVERRIDE — mirror it only when the adjustment actually carries one.
+        // Absence means "fall back to the recurring computed stipend", so never default this to 0:
+        // that would wipe the computed stipend from the breakdown of anyone with a bonus/reimb.
+        if (a.stipend != null && a.stipend !== "") m.stipend = Number(a.stipend)||0;
+        (byEmp[empId] = byEmp[empId] || {})[pIdx] = m;
+      }
     for (const [empId, perPeriod] of Object.entries(byEmp)) {
       const docId = mirrorTarget(empId);
       if (docId) await saveMyAdj(docId, perPeriod);
@@ -1251,7 +1263,8 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const periodAdj = (empAdj && empAdj[String(periodIdx)]) || {};   // this period's bonus / reimbursement
   const periodBonus = Number(periodAdj.bonus) || 0;
   const periodReimb = Number(periodAdj.reimbursement) || 0;
-  const periodStipend = emp ? stipendFor(emp, period) : 0;        // recurring per-period stipend
+  // per-period stipend: an owner override for this period wins, else the recurring roster stipend
+  const periodStipend = (periodAdj.stipend != null && periodAdj.stipend !== "") ? (Number(periodAdj.stipend) || 0) : (emp ? stipendFor(emp, period) : 0);
   const periodLabel = fmtShortYr(period.start) + " – " + fmtShortYr(period.end);
 
   // when navigating to another period, pull the selected day into that period
@@ -1693,8 +1706,10 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     const base = computedBase;   // Base is read-only in the roll-up (salary ÷ 26) — change it in Employees & rates
     const bonus = Number(adj.bonus) || 0;
     const reimb = Number(adj.reimbursement) || 0;
-    // recurring stipend: Pay-period view only (like Base), never for removed staff
-    const stip = (mode === "period" && !removed) ? stipendFor(emp, selPeriod) : 0;
+    // recurring stipend: Pay-period view only (like Base), never for removed staff.
+    // A typed cell overrides it for THIS period only; clearing reverts to the computed value.
+    const computedStip = (mode === "period" && !removed) ? stipendFor(emp, selPeriod) : 0;
+    const stip = has(adj.stipend) ? Number(adj.stipend) : computedStip;
     const notes = adj.notes || "";
     return { emp, adj, computedCounts, computedOther, counts, base, variable, bonus, reimb, stip, notes, other, otherAmt: other,
       pay: base + variable + bonus + reimb + stip, n: empEntries.length, otherNotes, removed };
@@ -1978,7 +1993,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
                 {ovCell(r, "variable", r.variable, "Variable")}
                 {ovCell(r, "bonus", r.bonus, "Bonus")}
                 {ovCell(r, "reimbursement", r.reimb, "Reimbursement")}
-                <td className="num">{r.stip ? money(r.stip) : ""}</td>
+                {ovCell(r, "stipend", r.stip, "Stipend")}
                 {cntCell(r, "consults", "Consults")}
                 {cntCell(r, "followups", "Follow-ups")}
                 {cntCell(r, "clinic_pts", "Clinic pts")}

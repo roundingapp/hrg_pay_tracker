@@ -750,8 +750,11 @@ function App() {
       }
       const byEmp = {};
       for (const [pIdx, perEmp] of Object.entries(adjustments || {}))
-        for (const [empId, a] of Object.entries(perEmp || {}))
-          (byEmp[empId] = byEmp[empId] || {})[pIdx] = { bonus: Number(a.bonus) || 0, reimbursement: Number(a.reimbursement) || 0 };
+        for (const [empId, a] of Object.entries(perEmp || {})) {
+          const m = { bonus: Number(a.bonus) || 0, reimbursement: Number(a.reimbursement) || 0 };
+          if (a.stipend != null && a.stipend !== "") m.stipend = Number(a.stipend) || 0;
+          (byEmp[empId] = byEmp[empId] || {})[pIdx] = m;
+        }
       for (const [empId, perPeriod] of Object.entries(byEmp)) {
         const docId = uidOf(empId);
         if (docId) await saveMyAdj(docId, perPeriod);
@@ -790,8 +793,11 @@ function App() {
     await saveAdjustments(map);
     const byEmp = {};
     for (const [pIdx, perEmp] of Object.entries(map || {}))
-      for (const [empId, a] of Object.entries(perEmp || {}))
-        (byEmp[empId] = byEmp[empId] || {})[pIdx] = { bonus: Number(a.bonus) || 0, reimbursement: Number(a.reimbursement) || 0 };
+      for (const [empId, a] of Object.entries(perEmp || {})) {
+        const m = { bonus: Number(a.bonus) || 0, reimbursement: Number(a.reimbursement) || 0 };
+        if (a.stipend != null && a.stipend !== "") m.stipend = Number(a.stipend) || 0;
+        (byEmp[empId] = byEmp[empId] || {})[pIdx] = m;
+      }
     for (const [empId, perPeriod] of Object.entries(byEmp)) {
       const docId = mirrorTarget(empId);
       if (docId) await saveMyAdj(docId, perPeriod);
@@ -1158,7 +1164,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
   const periodAdj = empAdj && empAdj[String(periodIdx)] || {};
   const periodBonus = Number(periodAdj.bonus) || 0;
   const periodReimb = Number(periodAdj.reimbursement) || 0;
-  const periodStipend = emp ? stipendFor(emp, period) : 0;
+  const periodStipend = periodAdj.stipend != null && periodAdj.stipend !== "" ? Number(periodAdj.stipend) || 0 : emp ? stipendFor(emp, period) : 0;
   const periodLabel = fmtShortYr(period.start) + " \u2013 " + fmtShortYr(period.end);
   useEffect(() => {
     if (periodIndexFor(date) !== periodIdx) setDate(period.start);
@@ -1523,7 +1529,8 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     const base = computedBase;
     const bonus = Number(adj.bonus) || 0;
     const reimb = Number(adj.reimbursement) || 0;
-    const stip = mode === "period" && !removed ? stipendFor(emp, selPeriod) : 0;
+    const computedStip = mode === "period" && !removed ? stipendFor(emp, selPeriod) : 0;
+    const stip = has(adj.stipend) ? Number(adj.stipend) : computedStip;
     const notes = adj.notes || "";
     return {
       emp,
@@ -1711,7 +1718,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     const tot = dayTotal(iso);
     const cls = "day-cell" + (iso === dayDate ? " selected" : "") + (tot > 0 ? " logged" : "") + (iso === todayISO() ? " today" : "");
     return /* @__PURE__ */ React.createElement("div", { className: cls, key: iso, onClick: () => setDayDate(iso) }, /* @__PURE__ */ React.createElement("div", { className: "dnum" }, d), tot > 0 ? /* @__PURE__ */ React.createElement("div", { className: "damt" }, money(tot)) : /* @__PURE__ */ React.createElement("div", { className: "dempty" }, "\u2014"));
-  }))), lateEntries.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "card", style: { background: "var(--danger-soft)", border: "1px solid var(--danger)", marginBottom: 18, padding: "12px 16px" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "var(--danger)", fontWeight: 600, fontSize: 14 } }, "\u26A0 ", lateEntries.length, " late ", lateEntries.length === 1 ? "entry" : "entries", " added after this period locked"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "var(--danger)", marginTop: 4 } }, "These were logged after the lock cutoff and are included in the totals above. Review before paying \u2014 someone logged work for a period you may have already processed.")), /* @__PURE__ */ React.createElement("div", { className: "metric-grid" }, /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Total payout"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, money(grand))), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Consults"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalConsults)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Follow-ups"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalFollow)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Entries"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, filtered.length))), /* @__PURE__ */ React.createElement("div", { className: "scroll-x" }, /* @__PURE__ */ React.createElement("table", { className: "rollup-table" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, sortTh("name", "Employee"), sortTh("pay", "Pay", true), sortTh("base", "Base", true), sortTh("variable", "Variable", true), sortTh("bonus", "Bonus", true), sortTh("reimb", "Reimburse", true), sortTh("stipend", "Stipend", true), sortTh("consults", "Cons", true), sortTh("followups", "F/U", true), sortTh("clinic_pts", "Clinic pts", true), sortTh("perdiem", "Per diem", true), sortTh("clinic_hr", "Clinic hr", true), sortTh("virtual_hr", "Virtual hr", true), sortTh("hosp_hr", "Hosp hr", true), sortTh("other", "Other", true), /* @__PURE__ */ React.createElement("th", { style: { whiteSpace: "nowrap" } }, "Notes"))), /* @__PURE__ */ React.createElement("tbody", null, sortedRows.map((r) => /* @__PURE__ */ React.createElement("tr", { key: r.emp.id }, /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, lastFirst(r.emp.name)), /* @__PURE__ */ React.createElement("td", { className: "num pay" }, money(r.pay)), /* @__PURE__ */ React.createElement("td", { className: "num" }, r.base ? money(r.base) : ""), ovCell(r, "variable", r.variable, "Variable"), ovCell(r, "bonus", r.bonus, "Bonus"), ovCell(r, "reimbursement", r.reimb, "Reimbursement"), /* @__PURE__ */ React.createElement("td", { className: "num" }, r.stip ? money(r.stip) : ""), cntCell(r, "consults", "Consults"), cntCell(r, "followups", "Follow-ups"), cntCell(r, "clinic_pts", "Clinic pts"), cntCell(r, "perdiem", "Per diem"), cntCell(r, "clinic_hr", "Clinic hr"), cntCell(r, "virtual_hr", "Virtual hr"), cntCell(r, "hosp_hr", "Hosp hr"), ovCell(r, "other", r.otherAmt, "Other"), /* @__PURE__ */ React.createElement("td", null, editable ? /* @__PURE__ */ React.createElement(
+  }))), lateEntries.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "card", style: { background: "var(--danger-soft)", border: "1px solid var(--danger)", marginBottom: 18, padding: "12px 16px" } }, /* @__PURE__ */ React.createElement("div", { style: { color: "var(--danger)", fontWeight: 600, fontSize: 14 } }, "\u26A0 ", lateEntries.length, " late ", lateEntries.length === 1 ? "entry" : "entries", " added after this period locked"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "var(--danger)", marginTop: 4 } }, "These were logged after the lock cutoff and are included in the totals above. Review before paying \u2014 someone logged work for a period you may have already processed.")), /* @__PURE__ */ React.createElement("div", { className: "metric-grid" }, /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Total payout"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, money(grand))), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Consults"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalConsults)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Follow-ups"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, totalFollow)), /* @__PURE__ */ React.createElement("div", { className: "metric" }, /* @__PURE__ */ React.createElement("div", { className: "m-label" }, "Entries"), /* @__PURE__ */ React.createElement("div", { className: "m-val" }, filtered.length))), /* @__PURE__ */ React.createElement("div", { className: "scroll-x" }, /* @__PURE__ */ React.createElement("table", { className: "rollup-table" }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, sortTh("name", "Employee"), sortTh("pay", "Pay", true), sortTh("base", "Base", true), sortTh("variable", "Variable", true), sortTh("bonus", "Bonus", true), sortTh("reimb", "Reimburse", true), sortTh("stipend", "Stipend", true), sortTh("consults", "Cons", true), sortTh("followups", "F/U", true), sortTh("clinic_pts", "Clinic pts", true), sortTh("perdiem", "Per diem", true), sortTh("clinic_hr", "Clinic hr", true), sortTh("virtual_hr", "Virtual hr", true), sortTh("hosp_hr", "Hosp hr", true), sortTh("other", "Other", true), /* @__PURE__ */ React.createElement("th", { style: { whiteSpace: "nowrap" } }, "Notes"))), /* @__PURE__ */ React.createElement("tbody", null, sortedRows.map((r) => /* @__PURE__ */ React.createElement("tr", { key: r.emp.id }, /* @__PURE__ */ React.createElement("td", { style: { whiteSpace: "nowrap" } }, lastFirst(r.emp.name)), /* @__PURE__ */ React.createElement("td", { className: "num pay" }, money(r.pay)), /* @__PURE__ */ React.createElement("td", { className: "num" }, r.base ? money(r.base) : ""), ovCell(r, "variable", r.variable, "Variable"), ovCell(r, "bonus", r.bonus, "Bonus"), ovCell(r, "reimbursement", r.reimb, "Reimbursement"), ovCell(r, "stipend", r.stip, "Stipend"), cntCell(r, "consults", "Consults"), cntCell(r, "followups", "Follow-ups"), cntCell(r, "clinic_pts", "Clinic pts"), cntCell(r, "perdiem", "Per diem"), cntCell(r, "clinic_hr", "Clinic hr"), cntCell(r, "virtual_hr", "Virtual hr"), cntCell(r, "hosp_hr", "Hosp hr"), ovCell(r, "other", r.otherAmt, "Other"), /* @__PURE__ */ React.createElement("td", null, editable ? /* @__PURE__ */ React.createElement(
     "input",
     {
       className: "cell-in notes-in",
