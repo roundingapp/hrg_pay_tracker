@@ -2068,6 +2068,8 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   const [openIds, setOpenIds] = useState(() => new Set());   // expanded employee rows; default collapsed
   const [dirty, setDirty] = useState(false);     // unsaved local changes? drives the Save button
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);               // a save is in flight — parent state updates mid-save must not rebuild the draft
+  const [modalId, setModalId] = useState(null);  // employee being edited in the "Add employee" popup
   const listRef = useRef(null);
   const draftRef = useRef(draft);
   const dirtyR = useRef(false);                  // mirror of `dirty` for use inside effects
@@ -2076,17 +2078,23 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
 
   useEffect(() => { draftRef.current = draft; }, [draft]);
   // pull in saved data, but never clobber unsaved local edits (e.g. on a background refresh)
-  useEffect(() => { if (!dirtyR.current) setDraft(mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salariesRef.current)); }, [employees, salaries]);
+  // Also skipped while a save is in flight: persistEmployees() sets `employees` BEFORE persistSalaries() sets
+  // `salaries`, so merging at that moment rebuilt the draft with the PRE-save salary map — the salary the
+  // user had just typed vanished, and the next autosave then deleted it from the salaries doc for real.
+  useEffect(() => { if (!dirtyR.current && !savingRef.current) setDraft(mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salariesRef.current)); }, [employees, salaries]);
 
   // (roster order is now derived: grouped by role, alphabetical within — no manual drag-to-reorder)
 
   const addEmp = () => {
     const name = newName.trim();
-    if (!name) return;
     const id = "emp_"+Date.now()+"_"+Math.random().toString(36).slice(2,6);
     const next = [...draft, { id, name, rates: {}, fixedEligible: false }];   // Consults + Follow-ups off by default
-    setDraft(next); setNewName(""); markDirty();
-    setOpenIds(s => new Set(s).add(id));   // a freshly added employee starts expanded
+    setDraft(next); setNewName(""); if (name) markDirty();
+    setModalId(id);   // edit the new person in a popup — not in a row at the bottom of a long list
+  };
+  const cancelNewEmp = () => {   // discard the person being added (removes the row; autosave drops it server-side too)
+    if (modalId) { setDraft(draft.filter(e => e.id !== modalId)); markDirty(); }
+    setModalId(null);
   };
   const removeEmp = (id) => {
     const emp = draft.find(e => e.id === id);
@@ -2256,7 +2264,12 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     });
     return { clean, salaries: salariesMap };
   };
-  const persistClean = async (clean, salariesMap) => { setSaving(true); markClean(); await persistEmployees(clean); await persistSalaries(salariesMap); setSaving(false); };
+  const persistClean = async (clean, salariesMap) => {
+    setSaving(true); savingRef.current = true; markClean();
+    salariesRef.current = salariesMap;   // any merge that does run sees the salaries being saved, never the stale pre-save map
+    try { await persistEmployees(clean); await persistSalaries(salariesMap); }
+    finally { savingRef.current = false; setSaving(false); }
+  };
   const save = async (sourceArr) => {        // explicit/manual (surfaces validation errors)
     const r = buildClean(sourceArr || draftRef.current);
     if (r.error) { showToast(r.error); return; }
@@ -2274,45 +2287,8 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   }, [dirty, draft]);
   const blockReason = dirty ? (buildClean(draft).error || null) : null;
 
-  return (
-    <div className="card">
-      <h2>Employees &amp; pay rates</h2>
-      <p className="hint">Each person signs in with their email. Consults ($60) and follow-ups ($30) are fixed; toggle eligibility per person. Set variable rates below — leave a field blank or 0 and that pay type won't appear in their entry screen.</p>
-
-      <div className="add-emp">
-        <input type="text" placeholder="Add employee name…" value={newName}
-          onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addEmp()} />
-        <button className="btn btn-ghost" onClick={addEmp}>Add</button>
-      </div>
-
-      {draft.length===0 && <div className="empty">No employees yet. Add your first staff member above.</div>}
-
-      {draft.length>1 && (
-        <div className="rates-toolbar">
-          <button onClick={expandAll}>Expand all</button>
-          <button onClick={collapseAll}>Collapse all</button>
-        </div>
-      )}
-
-      <datalist id="hrg-role-options">{roleOptions.map(r => <option key={r} value={r} />)}</datalist>
-      <div>
-      {roleGroups.map(g => (
-        <div className="role-group" key={g.key}>
-          <div className="role-header">{g.label} <span className="role-count">{g.emps.length}</span></div>
-          {g.emps.map(emp => {
-        const open = openIds.has(emp.id);
-        const meta = empMeta(emp);
-        return (
-        <div className={"emp-rate-block" + (open ? " open" : " collapsed")} key={emp.id}>
-          <div className="ename">
-            <div className="emp-head" onClick={()=>toggleOpen(emp.id)}>
-              <span className="emp-chev">{open ? "▾" : "▸"}</span>
-              <span className="emp-name-txt">{lastFirst(emp.name) || "Unnamed employee"}</span>
-              {!open && <span className={"emp-meta"+(meta.warn?" warn":"")}>{meta.user} · {meta.right}</span>}
-            </div>
-            {open && <button className="btn btn-danger" onClick={()=>removeEmp(emp.id)}>Remove</button>}
-          </div>
-          {open && (
+  // the expanded per-employee editor — shared by the inline row and the Add-employee popup
+  const editorFor = (emp) => (
             <>
               <div className="emp-section" style={{marginTop:12}}>
                 <div className="field-row">
@@ -2434,13 +2410,72 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                 )}
               </div>
             </>
-          )}
+  );
+
+  return (
+    <div className="card">
+      <h2>Employees &amp; pay rates</h2>
+      <p className="hint">Each person signs in with their email. Consults ($60) and follow-ups ($30) are fixed; toggle eligibility per person. Set variable rates below — leave a field blank or 0 and that pay type won't appear in their entry screen.</p>
+
+      <div className="add-emp">
+        <input type="text" placeholder="Add employee name…" value={newName}
+          onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addEmp()} />
+        <button className="btn btn-ghost" onClick={addEmp}>Add</button>
+      </div>
+
+      {draft.length===0 && <div className="empty">No employees yet. Add your first staff member above.</div>}
+
+      {draft.length>1 && (
+        <div className="rates-toolbar">
+          <button onClick={expandAll}>Expand all</button>
+          <button onClick={collapseAll}>Collapse all</button>
+        </div>
+      )}
+
+      <datalist id="hrg-role-options">{roleOptions.map(r => <option key={r} value={r} />)}</datalist>
+      <div>
+      {roleGroups.map(g => (
+        <div className="role-group" key={g.key}>
+          <div className="role-header">{g.label} <span className="role-count">{g.emps.length}</span></div>
+          {g.emps.map(emp => {
+        const open = openIds.has(emp.id);
+        const meta = empMeta(emp);
+        return (
+        <div className={"emp-rate-block" + (open ? " open" : " collapsed")} key={emp.id}>
+          <div className="ename">
+            <div className="emp-head" onClick={()=>toggleOpen(emp.id)}>
+              <span className="emp-chev">{open ? "▾" : "▸"}</span>
+              <span className="emp-name-txt">{lastFirst(emp.name) || "Unnamed employee"}</span>
+              {!open && <span className={"emp-meta"+(meta.warn?" warn":"")}>{meta.user} · {meta.right}</span>}
+            </div>
+            {open && <button className="btn btn-danger" onClick={()=>removeEmp(emp.id)}>Remove</button>}
+          </div>
+          {open && editorFor(emp)}
         </div>
         );
       })}
         </div>
       ))}
       </div>
+
+      {modalId && (() => {
+        const emp = draft.find(e => e.id === modalId);
+        if (!emp) return null;
+        return (
+          <div className="modal-backdrop" onClick={()=>setModalId(null)}>
+            <div className="modal emp-modal" onClick={e=>e.stopPropagation()}>
+              <div className="pto-head"><h3>Add employee</h3><button className="btn btn-ghost" onClick={cancelNewEmp}>Cancel</button></div>
+              {editorFor(emp)}
+              <div className="modal-actions" style={{marginTop:14, alignItems:"center", justifyContent:"space-between"}}>
+                <span style={{fontSize:13, fontWeight:500, color: blockReason ? "var(--amber)" : "var(--accent-ink)"}}>
+                  {saving ? "Saving…" : blockReason ? blockReason : dirty ? "Saving…" : "✓ Saved"}
+                </span>
+                <button className="btn" onClick={()=>setModalId(null)}>Done</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {draft.length>0 && (
         <div className="actions" style={{justifyContent:"flex-end", alignItems:"center"}}>

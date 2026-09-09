@@ -1739,6 +1739,8 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   const [openIds, setOpenIds] = useState(() => /* @__PURE__ */ new Set());
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [modalId, setModalId] = useState(null);
   const listRef = useRef(null);
   const draftRef = useRef(draft);
   const dirtyR = useRef(false);
@@ -1754,17 +1756,23 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     draftRef.current = draft;
   }, [draft]);
   useEffect(() => {
-    if (!dirtyR.current) setDraft(mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salariesRef.current));
+    if (!dirtyR.current && !savingRef.current) setDraft(mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salariesRef.current));
   }, [employees, salaries]);
   const addEmp = () => {
     const name = newName.trim();
-    if (!name) return;
     const id = "emp_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
     const next = [...draft, { id, name, rates: {}, fixedEligible: false }];
     setDraft(next);
     setNewName("");
-    markDirty();
-    setOpenIds((s) => new Set(s).add(id));
+    if (name) markDirty();
+    setModalId(id);
+  };
+  const cancelNewEmp = () => {
+    if (modalId) {
+      setDraft(draft.filter((e) => e.id !== modalId));
+      markDirty();
+    }
+    setModalId(null);
   };
   const removeEmp = (id) => {
     const emp = draft.find((e) => e.id === id);
@@ -1965,10 +1973,16 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   };
   const persistClean = async (clean, salariesMap) => {
     setSaving(true);
+    savingRef.current = true;
     markClean();
-    await persistEmployees(clean);
-    await persistSalaries(salariesMap);
-    setSaving(false);
+    salariesRef.current = salariesMap;
+    try {
+      await persistEmployees(clean);
+      await persistSalaries(salariesMap);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
   const save = async (sourceArr) => {
     const r = buildClean(sourceArr || draftRef.current);
@@ -1988,6 +2002,88 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     return () => clearTimeout(id);
   }, [dirty, draft]);
   const blockReason = dirty ? buildClean(draft).error || null : null;
+  const editorFor = (emp) => /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "emp-section", style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Name"), /* @__PURE__ */ React.createElement("input", { type: "text", value: emp.name, onChange: (e) => setName(emp.id, e.target.value), style: { fontWeight: 600 } })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Role"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "text",
+      list: "hrg-role-options",
+      value: emp.role ?? "",
+      placeholder: "e.g. NP, Scribe, MA",
+      autoComplete: "off",
+      onChange: (e) => setRole(emp.id, e.target.value)
+    }
+  ))), !emp.salaryOnly && /* @__PURE__ */ React.createElement("div", { className: "field-row", style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Email (their sign-in)"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "email",
+      value: emp.email ?? "",
+      autoComplete: "off",
+      placeholder: "name@houstonrenal.com",
+      onChange: (e) => setEmail(emp.id, e.target.value)
+    }
+  )))), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("div", { className: "check-cluster" }, emp.managedBy !== "ADMIN" && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.salaryOnly, onChange: (e) => setSalaryOnly(emp.id, e.target.checked) }), " Salary only ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "no login \xB7 Base only")), !emp.salaryOnly && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.isManager, onChange: (e) => setIsManager(emp.id, e.target.checked) }), " Office manager ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "enters for others")), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.fixedEligible, onChange: (e) => setFixedElig(emp.id, e.target.checked) }), " Consults + follow-ups ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "$60 / $30")))), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Pay type ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "ADP: W-2 or 1099")), /* @__PURE__ */ React.createElement("select", { value: emp.taxType || "", onChange: (e) => setTaxType(emp.id, e.target.value), style: { maxWidth: 340 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Auto \u2014 W-2 if salaried, otherwise 1099"), /* @__PURE__ */ React.createElement("option", { value: "w2" }, "W-2 employee"), /* @__PURE__ */ React.createElement("option", { value: "1099" }, "1099 contractor")))), /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Annual salary ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "base \xB7 paid by ADP")), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "text",
+      inputMode: "numeric",
+      value: emp.annualSalary ?? "",
+      placeholder: "none",
+      onChange: (e) => setSalary(emp.id, e.target.value)
+    }
+  ), Number(emp.annualSalary) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, money(Number(emp.annualSalary) / 26), " biweekly")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "PTO days ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "annual; blank = none")), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "text",
+      inputMode: "decimal",
+      value: emp.ptoDays ?? "",
+      placeholder: "none",
+      onChange: (e) => setPtoDays(emp.id, e.target.value)
+    }
+  ))), /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Start date ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "PTO resets yearly on this date")), /* @__PURE__ */ React.createElement("input", { type: "date", value: emp.startDate || "", onChange: (e) => setStartDate(emp.id, e.target.value) })), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Patient cap ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "salary-covered")), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "text",
+      inputMode: "numeric",
+      value: emp.patientCap ?? "",
+      placeholder: "none",
+      onChange: (e) => setCap(emp.id, e.target.value)
+    }
+  ), Number(emp.patientCap) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, "Certifies once/period; changing it re-prompts."))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("label", null, "Stipend ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "$ / pay period \xB7 paid automatically")), /* @__PURE__ */ React.createElement("div", { className: "stipend-row", style: { gridTemplateColumns: Number(emp.stipend) > 0 ? void 0 : "84px minmax(0,1fr)" } }, /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "text",
+      inputMode: "decimal",
+      value: emp.stipend ?? "",
+      placeholder: "$",
+      onChange: (e) => setStipend(emp.id, e.target.value)
+    }
+  ), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "text",
+      value: emp.stipendNote ?? "",
+      placeholder: "note \u2014 e.g. Parking",
+      onChange: (e) => setStipendNote(emp.id, e.target.value)
+    }
+  ), Number(emp.stipend) > 0 && /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "date",
+      title: "Start \u2014 first period containing this date",
+      value: emp.stipendStart || "",
+      onChange: (e) => setStipendStart(emp.id, e.target.value)
+    }
+  ))), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "rate-grid", style: { marginTop: 12 } }, VARIABLE.map((t) => /* @__PURE__ */ React.createElement("div", { className: "rate-field", key: t.key }, /* @__PURE__ */ React.createElement("label", null, t.label, " ($/", t.unit, ")"), /* @__PURE__ */ React.createElement(
+    "input",
+    {
+      type: "number",
+      min: "0",
+      step: "0.01",
+      placeholder: "0",
+      value: emp.rates?.[t.key] ?? "",
+      onChange: (e) => setRate(emp.id, t.key, e.target.value)
+    }
+  )))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("label", null, "Entered by"), /* @__PURE__ */ React.createElement("select", { value: emp.managedBy || "", onChange: (e) => setManagedBy(emp.id, e.target.value), style: { maxWidth: 340 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Self \u2014 logs in & enters their own"), /* @__PURE__ */ React.createElement("option", { value: "ADMIN" }, "Administrator \u2014 you enter their hours"), draft.filter((m) => m.isManager && m.id !== emp.id).map((m) => /* @__PURE__ */ React.createElement("option", { key: m.id, value: m.id }, "Entered by ", lastFirst(m.name) || "(unnamed manager)"))))), !emp.salaryOnly && emp.isManager && /* @__PURE__ */ React.createElement("div", { className: "hint-sm", style: { marginTop: 6 } }, "Assign staff to this manager via each person's ", /* @__PURE__ */ React.createElement("strong", null, "Entered by"), " field.")));
   return /* @__PURE__ */ React.createElement("div", { className: "card" }, /* @__PURE__ */ React.createElement("h2", null, "Employees & pay rates"), /* @__PURE__ */ React.createElement("p", { className: "hint" }, "Each person signs in with their email. Consults ($60) and follow-ups ($30) are fixed; toggle eligibility per person. Set variable rates below \u2014 leave a field blank or 0 and that pay type won't appear in their entry screen."), /* @__PURE__ */ React.createElement("div", { className: "add-emp" }, /* @__PURE__ */ React.createElement(
     "input",
     {
@@ -2000,89 +2096,12 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   ), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: addEmp }, "Add")), draft.length === 0 && /* @__PURE__ */ React.createElement("div", { className: "empty" }, "No employees yet. Add your first staff member above."), draft.length > 1 && /* @__PURE__ */ React.createElement("div", { className: "rates-toolbar" }, /* @__PURE__ */ React.createElement("button", { onClick: expandAll }, "Expand all"), /* @__PURE__ */ React.createElement("button", { onClick: collapseAll }, "Collapse all")), /* @__PURE__ */ React.createElement("datalist", { id: "hrg-role-options" }, roleOptions.map((r) => /* @__PURE__ */ React.createElement("option", { key: r, value: r }))), /* @__PURE__ */ React.createElement("div", null, roleGroups.map((g) => /* @__PURE__ */ React.createElement("div", { className: "role-group", key: g.key }, /* @__PURE__ */ React.createElement("div", { className: "role-header" }, g.label, " ", /* @__PURE__ */ React.createElement("span", { className: "role-count" }, g.emps.length)), g.emps.map((emp) => {
     const open = openIds.has(emp.id);
     const meta = empMeta(emp);
-    return /* @__PURE__ */ React.createElement("div", { className: "emp-rate-block" + (open ? " open" : " collapsed"), key: emp.id }, /* @__PURE__ */ React.createElement("div", { className: "ename" }, /* @__PURE__ */ React.createElement("div", { className: "emp-head", onClick: () => toggleOpen(emp.id) }, /* @__PURE__ */ React.createElement("span", { className: "emp-chev" }, open ? "\u25BE" : "\u25B8"), /* @__PURE__ */ React.createElement("span", { className: "emp-name-txt" }, lastFirst(emp.name) || "Unnamed employee"), !open && /* @__PURE__ */ React.createElement("span", { className: "emp-meta" + (meta.warn ? " warn" : "") }, meta.user, " \xB7 ", meta.right)), open && /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", onClick: () => removeEmp(emp.id) }, "Remove")), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "emp-section", style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Name"), /* @__PURE__ */ React.createElement("input", { type: "text", value: emp.name, onChange: (e) => setName(emp.id, e.target.value), style: { fontWeight: 600 } })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Role"), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "text",
-        list: "hrg-role-options",
-        value: emp.role ?? "",
-        placeholder: "e.g. NP, Scribe, MA",
-        autoComplete: "off",
-        onChange: (e) => setRole(emp.id, e.target.value)
-      }
-    ))), !emp.salaryOnly && /* @__PURE__ */ React.createElement("div", { className: "field-row", style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Email (their sign-in)"), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "email",
-        value: emp.email ?? "",
-        autoComplete: "off",
-        placeholder: "name@houstonrenal.com",
-        onChange: (e) => setEmail(emp.id, e.target.value)
-      }
-    )))), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("div", { className: "check-cluster" }, emp.managedBy !== "ADMIN" && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.salaryOnly, onChange: (e) => setSalaryOnly(emp.id, e.target.checked) }), " Salary only ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "no login \xB7 Base only")), !emp.salaryOnly && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.isManager, onChange: (e) => setIsManager(emp.id, e.target.checked) }), " Office manager ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "enters for others")), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.fixedEligible, onChange: (e) => setFixedElig(emp.id, e.target.checked) }), " Consults + follow-ups ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "$60 / $30")))), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Pay type ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "ADP: W-2 or 1099")), /* @__PURE__ */ React.createElement("select", { value: emp.taxType || "", onChange: (e) => setTaxType(emp.id, e.target.value), style: { maxWidth: 340 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Auto \u2014 W-2 if salaried, otherwise 1099"), /* @__PURE__ */ React.createElement("option", { value: "w2" }, "W-2 employee"), /* @__PURE__ */ React.createElement("option", { value: "1099" }, "1099 contractor")))), /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Annual salary ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "base \xB7 paid by ADP")), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "text",
-        inputMode: "numeric",
-        value: emp.annualSalary ?? "",
-        placeholder: "none",
-        onChange: (e) => setSalary(emp.id, e.target.value)
-      }
-    ), Number(emp.annualSalary) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, money(Number(emp.annualSalary) / 26), " biweekly")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "PTO days ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "annual; blank = none")), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "text",
-        inputMode: "decimal",
-        value: emp.ptoDays ?? "",
-        placeholder: "none",
-        onChange: (e) => setPtoDays(emp.id, e.target.value)
-      }
-    ))), /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Start date ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "PTO resets yearly on this date")), /* @__PURE__ */ React.createElement("input", { type: "date", value: emp.startDate || "", onChange: (e) => setStartDate(emp.id, e.target.value) })), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Patient cap ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "salary-covered")), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "text",
-        inputMode: "numeric",
-        value: emp.patientCap ?? "",
-        placeholder: "none",
-        onChange: (e) => setCap(emp.id, e.target.value)
-      }
-    ), Number(emp.patientCap) > 0 && /* @__PURE__ */ React.createElement("div", { className: "fixed-note", style: { marginTop: 4 } }, "Certifies once/period; changing it re-prompts."))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("label", null, "Stipend ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "$ / pay period \xB7 paid automatically")), /* @__PURE__ */ React.createElement("div", { className: "stipend-row", style: { gridTemplateColumns: Number(emp.stipend) > 0 ? void 0 : "84px minmax(0,1fr)" } }, /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "text",
-        inputMode: "decimal",
-        value: emp.stipend ?? "",
-        placeholder: "$",
-        onChange: (e) => setStipend(emp.id, e.target.value)
-      }
-    ), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "text",
-        value: emp.stipendNote ?? "",
-        placeholder: "note \u2014 e.g. Parking",
-        onChange: (e) => setStipendNote(emp.id, e.target.value)
-      }
-    ), Number(emp.stipend) > 0 && /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "date",
-        title: "Start \u2014 first period containing this date",
-        value: emp.stipendStart || "",
-        onChange: (e) => setStipendStart(emp.id, e.target.value)
-      }
-    ))), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "rate-grid", style: { marginTop: 12 } }, VARIABLE.map((t) => /* @__PURE__ */ React.createElement("div", { className: "rate-field", key: t.key }, /* @__PURE__ */ React.createElement("label", null, t.label, " ($/", t.unit, ")"), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "number",
-        min: "0",
-        step: "0.01",
-        placeholder: "0",
-        value: emp.rates?.[t.key] ?? "",
-        onChange: (e) => setRate(emp.id, t.key, e.target.value)
-      }
-    )))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12 } }, /* @__PURE__ */ React.createElement("label", null, "Entered by"), /* @__PURE__ */ React.createElement("select", { value: emp.managedBy || "", onChange: (e) => setManagedBy(emp.id, e.target.value), style: { maxWidth: 340 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Self \u2014 logs in & enters their own"), /* @__PURE__ */ React.createElement("option", { value: "ADMIN" }, "Administrator \u2014 you enter their hours"), draft.filter((m) => m.isManager && m.id !== emp.id).map((m) => /* @__PURE__ */ React.createElement("option", { key: m.id, value: m.id }, "Entered by ", lastFirst(m.name) || "(unnamed manager)"))))), !emp.salaryOnly && emp.isManager && /* @__PURE__ */ React.createElement("div", { className: "hint-sm", style: { marginTop: 6 } }, "Assign staff to this manager via each person's ", /* @__PURE__ */ React.createElement("strong", null, "Entered by"), " field."))));
-  })))), draft.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "actions", style: { justifyContent: "flex-end", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 500, color: blockReason ? "var(--amber)" : "var(--accent-ink)" } }, saving ? "Saving\u2026" : blockReason ? blockReason : dirty ? "Saving\u2026" : "\u2713 All changes saved")));
+    return /* @__PURE__ */ React.createElement("div", { className: "emp-rate-block" + (open ? " open" : " collapsed"), key: emp.id }, /* @__PURE__ */ React.createElement("div", { className: "ename" }, /* @__PURE__ */ React.createElement("div", { className: "emp-head", onClick: () => toggleOpen(emp.id) }, /* @__PURE__ */ React.createElement("span", { className: "emp-chev" }, open ? "\u25BE" : "\u25B8"), /* @__PURE__ */ React.createElement("span", { className: "emp-name-txt" }, lastFirst(emp.name) || "Unnamed employee"), !open && /* @__PURE__ */ React.createElement("span", { className: "emp-meta" + (meta.warn ? " warn" : "") }, meta.user, " \xB7 ", meta.right)), open && /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger", onClick: () => removeEmp(emp.id) }, "Remove")), open && editorFor(emp));
+  })))), modalId && (() => {
+    const emp = draft.find((e) => e.id === modalId);
+    if (!emp) return null;
+    return /* @__PURE__ */ React.createElement("div", { className: "modal-backdrop", onClick: () => setModalId(null) }, /* @__PURE__ */ React.createElement("div", { className: "modal emp-modal", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { className: "pto-head" }, /* @__PURE__ */ React.createElement("h3", null, "Add employee"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: cancelNewEmp }, "Cancel")), editorFor(emp), /* @__PURE__ */ React.createElement("div", { className: "modal-actions", style: { marginTop: 14, alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 500, color: blockReason ? "var(--amber)" : "var(--accent-ink)" } }, saving ? "Saving\u2026" : blockReason ? blockReason : dirty ? "Saving\u2026" : "\u2713 Saved"), /* @__PURE__ */ React.createElement("button", { className: "btn", onClick: () => setModalId(null) }, "Done"))));
+  })(), draft.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "actions", style: { justifyContent: "flex-end", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 500, color: blockReason ? "var(--amber)" : "var(--accent-ink)" } }, saving ? "Saving\u2026" : blockReason ? blockReason : dirty ? "Saving\u2026" : "\u2713 All changes saved")));
 }
 function AllEntries({ employees, entries, deleteEntry, showToast }) {
   const nameOf = (e) => {
