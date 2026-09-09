@@ -41,6 +41,10 @@ const ROLE_LABEL = { md: "MD", np: "NP", staff: "Staff", scribe: "Scribe" };
 // PTO resets each year on the employee's work anniversary (their start date). Returns the Date that
 // the CURRENT PTO year began (the most recent anniversary on or before today), or null if no start date.
 function ptoYearStartDate(startDate) {
+  // POLICY 2026-09-09 (Neil): PTO resets Jan 1 for everyone — the PTO year is the calendar year.
+  // `startDate` is the employment start date (informational) and no longer drives the PTO year.
+  // Returning null makes every caller fall back to the calendar year.
+  return null;
   if (!startDate) return null;
   const s = parseDate(startDate); if (isNaN(s)) return null;
   const t = parseDate(todayISO());
@@ -2172,8 +2176,13 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map(e => e.id===id ? {...e, ptoDays: val} : e));
     markDirty();
   };
+  const setShifts = (id, val) => {
+    if (val !== "" && !/^\d*\.?\d*$/.test(val)) return;   // shifts per month (half shifts ok)
+    setDraft(draft.map(e => e.id===id ? {...e, shiftsPerMonth: val} : e));
+    markDirty();
+  };
   const setStartDate = (id, val) => {
-    setDraft(draft.map(e => e.id===id ? {...e, startDate: val} : e));   // YYYY-MM-DD; anniversary for PTO reset
+    setDraft(draft.map(e => e.id===id ? {...e, startDate: val} : e));   // YYYY-MM-DD; employment start (informational — PTO year is the calendar year)
     markDirty();
   };
   const setStipend = (id, val) => {
@@ -2211,6 +2220,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     }
     if (Number(emp.annualSalary) > 0) bits.push("$" + Math.round(Number(emp.annualSalary)/1000) + "k");
     if (emp.taxType === "w2" || emp.taxType === "1099") bits.push(emp.taxType === "w2" ? "W-2" : "1099");
+    if (Number(emp.shiftsPerMonth) > 0) bits.push(Number(emp.shiftsPerMonth) + " shifts/mo");
     if (Number(emp.stipend) > 0) bits.push("$" + Number(emp.stipend) + "/period " + String(emp.stipendNote || "stipend").toLowerCase());
     if (emp.role && String(emp.role).trim()) bits.unshift(String(emp.role).trim());
     const noLogin = emp.salaryOnly;
@@ -2249,7 +2259,9 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       if (cap > 0 && !e.isManager && !e.salaryOnly) out.patientCap = Math.round(cap); else delete out.patientCap;
       const pto = Number(e.ptoDays);
       if (pto > 0) out.ptoDays = pto; else delete out.ptoDays;   // annual PTO allowance (supports half days)
-      if (/^\d{4}-\d{2}-\d{2}$/.test(String(e.startDate||""))) out.startDate = e.startDate; else delete out.startDate;   // PTO reset anniversary
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(e.startDate||""))) out.startDate = e.startDate; else delete out.startDate;   // employment start date
+      const spm = Number(e.shiftsPerMonth);
+      if (spm > 0) out.shiftsPerMonth = spm; else delete out.shiftsPerMonth;   // required shifts per month (1099 contractors)
       // recurring per-period stipend (e.g. parking). Start date defaults to today so already-paid
       // past periods never change retroactively.
       const st = Number(e.stipend);
@@ -2337,8 +2349,6 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                       <option value="1099">1099 contractor</option>
                     </select>
                   </div>
-                </div>
-                <div className="field-row">
                   <div>
                     <label>Annual salary <span className="hint-sm">base · paid by ADP</span></label>
                     <input type="text" inputMode="numeric" value={emp.annualSalary ?? ""} placeholder="none"
@@ -2347,15 +2357,22 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                       <div className="fixed-note" style={{marginTop:4}}>{money(Number(emp.annualSalary)/26)} biweekly</div>
                     )}
                   </div>
+                </div>
+                <div className="field-row">
                   <div>
-                    <label>PTO days <span className="hint-sm">annual; blank = none</span></label>
+                    <label>PTO days <span className="hint-sm">per calendar year · resets Jan 1 · blank = none</span></label>
                     <input type="text" inputMode="decimal" value={emp.ptoDays ?? ""} placeholder="none"
                       onChange={e=>setPtoDays(emp.id, e.target.value)} />
+                  </div>
+                  <div>
+                    <label>Shifts / month <span className="hint-sm">required · 1099 · blank = none</span></label>
+                    <input type="text" inputMode="decimal" value={emp.shiftsPerMonth ?? ""} placeholder="none"
+                      onChange={e=>setShifts(emp.id, e.target.value)} />
                   </div>
                 </div>
                 <div className="field-row">
                   <div>
-                    <label>Start date <span className="hint-sm">PTO resets yearly on this date</span></label>
+                    <label>Start date <span className="hint-sm">employment start</span></label>
                     <input type="date" value={emp.startDate || ""} onChange={e=>setStartDate(emp.id, e.target.value)} />
                   </div>
                   {!emp.salaryOnly && !emp.isManager && (
