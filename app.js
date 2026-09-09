@@ -1834,6 +1834,10 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map((e) => e.id === id ? { ...e, annualSalary: val } : e));
     markDirty();
   };
+  const setTaxType = (id, val) => {
+    setDraft(draft.map((e) => e.id === id ? { ...e, taxType: val } : e));
+    markDirty();
+  };
   const setPtoDays = (id, val) => {
     if (val !== "" && !/^\d*\.?\d*$/.test(val)) return;
     setDraft(draft.map((e) => e.id === id ? { ...e, ptoDays: val } : e));
@@ -1883,6 +1887,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       if (emp.managedBy) bits.push(emp.managedBy === "ADMIN" ? "admin-entered" : "manager-entered");
     }
     if (Number(emp.annualSalary) > 0) bits.push("$" + Math.round(Number(emp.annualSalary) / 1e3) + "k");
+    if (emp.taxType === "w2" || emp.taxType === "1099") bits.push(emp.taxType === "w2" ? "W-2" : "1099");
     if (Number(emp.stipend) > 0) bits.push("$" + Number(emp.stipend) + "/period " + String(emp.stipendNote || "stipend").toLowerCase());
     if (emp.role && String(emp.role).trim()) bits.unshift(String(emp.role).trim());
     const noLogin = emp.salaryOnly;
@@ -1916,6 +1921,9 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       const annual = Number(e.annualSalary);
       if (annual > 0) salariesMap[e.id] = Math.round(annual);
       delete out.annualSalary;
+      const tt = String(e.taxType || "").toLowerCase();
+      if (tt === "w2" || tt === "1099") out.taxType = tt;
+      else delete out.taxType;
       if (e.salaryOnly) {
         out.salaryOnly = true;
         out.username = "";
@@ -2011,7 +2019,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
         placeholder: "name@houstonrenal.com",
         onChange: (e) => setEmail(emp.id, e.target.value)
       }
-    )))), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("div", { className: "check-cluster" }, emp.managedBy !== "ADMIN" && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.salaryOnly, onChange: (e) => setSalaryOnly(emp.id, e.target.checked) }), " Salary only ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "no login \xB7 Base only")), !emp.salaryOnly && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.isManager, onChange: (e) => setIsManager(emp.id, e.target.checked) }), " Office manager ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "enters for others")), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.fixedEligible, onChange: (e) => setFixedElig(emp.id, e.target.checked) }), " Consults + follow-ups ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "$60 / $30")))), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Annual salary ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "W2 base")), /* @__PURE__ */ React.createElement(
+    )))), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("div", { className: "check-cluster" }, emp.managedBy !== "ADMIN" && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.salaryOnly, onChange: (e) => setSalaryOnly(emp.id, e.target.checked) }), " Salary only ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "no login \xB7 Base only")), !emp.salaryOnly && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.isManager, onChange: (e) => setIsManager(emp.id, e.target.checked) }), " Office manager ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "enters for others")), !emp.salaryOnly && !emp.isManager && /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: !!emp.fixedEligible, onChange: (e) => setFixedElig(emp.id, e.target.checked) }), " Consults + follow-ups ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "$60 / $30")))), /* @__PURE__ */ React.createElement("div", { className: "emp-section" }, /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Pay type ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "ADP: W-2 or 1099")), /* @__PURE__ */ React.createElement("select", { value: emp.taxType || "", onChange: (e) => setTaxType(emp.id, e.target.value), style: { maxWidth: 340 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "Auto \u2014 W-2 if salaried, otherwise 1099"), /* @__PURE__ */ React.createElement("option", { value: "w2" }, "W-2 employee"), /* @__PURE__ */ React.createElement("option", { value: "1099" }, "1099 contractor")))), /* @__PURE__ */ React.createElement("div", { className: "field-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", null, "Annual salary ", /* @__PURE__ */ React.createElement("span", { className: "hint-sm" }, "base \xB7 paid by ADP")), /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "text",

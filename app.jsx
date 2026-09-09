@@ -2155,6 +2155,10 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map(e => e.id===id ? {...e, annualSalary: val} : e));
     markDirty();
   };
+  const setTaxType = (id, val) => {
+    setDraft(draft.map(e => e.id===id ? {...e, taxType: val} : e));   // "w2" | "1099" | "" = auto (salaried→W2, else 1099)
+    markDirty();
+  };
   const setPtoDays = (id, val) => {
     if (val !== "" && !/^\d*\.?\d*$/.test(val)) return;   // allow half days (e.g. 12.5)
     setDraft(draft.map(e => e.id===id ? {...e, ptoDays: val} : e));
@@ -2198,6 +2202,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       if (emp.managedBy) bits.push(emp.managedBy === "ADMIN" ? "admin-entered" : "manager-entered");
     }
     if (Number(emp.annualSalary) > 0) bits.push("$" + Math.round(Number(emp.annualSalary)/1000) + "k");
+    if (emp.taxType === "w2" || emp.taxType === "1099") bits.push(emp.taxType === "w2" ? "W-2" : "1099");
     if (Number(emp.stipend) > 0) bits.push("$" + Number(emp.stipend) + "/period " + String(emp.stipendNote || "stipend").toLowerCase());
     if (emp.role && String(emp.role).trim()) bits.unshift(String(emp.role).trim());
     const noLogin = emp.salaryOnly;
@@ -2228,6 +2233,8 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       const annual = Number(e.annualSalary);
       if (annual > 0) salariesMap[e.id] = Math.round(annual);   // → owner-only salaries doc
       delete out.annualSalary;                                  // never store the amount in the employees record
+      const tt = String(e.taxType||"").toLowerCase();
+      if (tt === "w2" || tt === "1099") out.taxType = tt; else delete out.taxType;   // ADP pay type; blank = auto (salaried→W2, else 1099)
       if (e.salaryOnly) { out.salaryOnly = true; out.username = ""; out.email = ""; out.fixedEligible = false; out.rates = {}; delete out.managedBy; delete out.isManager; }
       else delete out.salaryOnly;
       const cap = Number(e.patientCap);
@@ -2347,7 +2354,17 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
               <div className="emp-section">
                 <div className="field-row">
                   <div>
-                    <label>Annual salary <span className="hint-sm">W2 base</span></label>
+                    <label>Pay type <span className="hint-sm">ADP: W-2 or 1099</span></label>
+                    <select value={emp.taxType || ""} onChange={e=>setTaxType(emp.id, e.target.value)} style={{maxWidth:340}}>
+                      <option value="">Auto — W-2 if salaried, otherwise 1099</option>
+                      <option value="w2">W-2 employee</option>
+                      <option value="1099">1099 contractor</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="field-row">
+                  <div>
+                    <label>Annual salary <span className="hint-sm">base · paid by ADP</span></label>
                     <input type="text" inputMode="numeric" value={emp.annualSalary ?? ""} placeholder="none"
                       onChange={e=>setSalary(emp.id, e.target.value)} />
                     {Number(emp.annualSalary) > 0 && (
