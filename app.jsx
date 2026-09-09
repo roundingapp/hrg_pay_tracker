@@ -114,10 +114,9 @@ function fmtShort(iso) { const d = parseDate(iso); return d.toLocaleDateString(u
 function fmtShortYr(iso) { const d = parseDate(iso); return d.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}); }
 
 // Salaried BASE for one pay period. A full period pays annual ÷ 26. When the person's start date
-// or last day (roster startDate / endDate) falls inside the period, the base is prorated:
-//   W-2  (taxType "w2", or salaried with no pay type set — the ADP export's default): by WEEKDAYS
-//        (Mon–Fri) employed ÷ weekdays in the period (10) — Neil, 2026-09-09.
-//   1099 (taxType "1099"): by inclusive CALENDAR days ÷ 14 (contractor shifts include weekends).
+// or last day (roster startDate / endDate) falls inside the period, the base is prorated by
+// WEEKDAYS (Mon–Fri) employed ÷ weekdays in the period (10) — for EVERYONE, W-2 and 1099 alike
+// (Neil, 2026-09-09: "keep all prorated amounts based on weekdays only going forward").
 // A period entirely before the start date or after the last day pays 0. Returns { base, days, of }
 // so callers can flag a partial period ("5/10 weekdays"). The payroll email (backups repo
 // payroll-summary.mjs) carries an identical copy — change both together.
@@ -128,9 +127,8 @@ function proratedBase(annual, period, emp) {
   const sd = emp && emp.startDate, ed = emp && emp.endDate;
   const from = isISO(sd) && sd > period.start ? sd : period.start;
   const to   = isISO(ed) && ed < period.end   ? ed : period.end;
-  const weekdaysOnly = !(emp && emp.taxType === "1099");
-  const countDays = (a, b) => { let n = 0; for (let d = parseDate(a); fmtISO(d) <= b; d = addDays(d, 1)) if (!weekdaysOnly || (d.getDay() >= 1 && d.getDay() <= 5)) n++; return n; };
-  const of = countDays(period.start, period.end);   // 10 weekdays (W-2) or 14 calendar days (1099)
+  const countDays = (a, b) => { let n = 0; for (let d = parseDate(a); fmtISO(d) <= b; d = addDays(d, 1)) if (d.getDay() >= 1 && d.getDay() <= 5) n++; return n; };
+  const of = countDays(period.start, period.end);   // 10 weekdays in a Sun–Sat period
   if (from > to) return { base: 0, days: 0, of };
   const days = countDays(from, to);
   if (days >= of) return { base: full, days: of, of };
@@ -1421,7 +1419,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
                 ? <div className="pay-breakdown">
                     {/* a stipend-only person (no salary) must not see a dead "Base $0.00" row */}
                     {baseBiweekly > 0 &&
-                      <div><span>Base{baseProrated ? " (prorated " + basePr.days + "/" + basePr.of + (basePr.of === PERIOD_LEN_DAYS ? " days)" : " weekdays)") : ""}</span><span className="pay">{money(baseBiweekly)}</span></div>}
+                      <div><span>Base{baseProrated ? " (prorated " + basePr.days + "/" + basePr.of + " weekdays)" : ""}</span><span className="pay">{money(baseBiweekly)}</span></div>}
                     {/* salary-only staff have no variable pay — don't show a dead $0.00 row
                         (still shown if a legacy period has real logged dollars) */}
                     {(!noPayTypes || periodDollars > 0) &&
@@ -2019,8 +2017,8 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
               <tr key={r.emp.id}>
                 <td style={{whiteSpace:"nowrap"}}>{lastFirst(r.emp.name)}</td>
                 <td className="num pay">{money(r.pay)}</td>
-                <td className="num" title={r.baseDays > 0 && r.baseDays < r.baseOf ? "Prorated: " + r.baseDays + " of " + r.baseOf + (r.baseOf === PERIOD_LEN_DAYS ? " calendar days (1099)" : " weekdays (W-2)") + " in this period (start / last day)" : undefined}>
-                  {r.base ? money(r.base) : ""}{r.baseDays > 0 && r.baseDays < r.baseOf ? <span className="hint-sm"> · {r.baseDays}/{r.baseOf}{r.baseOf === PERIOD_LEN_DAYS ? "d" : "wd"}</span> : null}</td>
+                <td className="num" title={r.baseDays > 0 && r.baseDays < r.baseOf ? "Prorated: " + r.baseDays + " of " + r.baseOf + " weekdays in this period (start / last day)" : undefined}>
+                  {r.base ? money(r.base) : ""}{r.baseDays > 0 && r.baseDays < r.baseOf ? <span className="hint-sm"> · {r.baseDays}/{r.baseOf}wd</span> : null}</td>
                 {ovCell(r, "variable", r.variable, "Variable")}
                 {ovCell(r, "bonus", r.bonus, "Bonus")}
                 {ovCell(r, "reimbursement", r.reimb, "Reimbursement")}
@@ -2387,7 +2385,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                     <input type="text" inputMode="numeric" value={emp.annualSalary ?? ""} placeholder="none"
                       onChange={e=>setSalary(emp.id, e.target.value)} />
                     {Number(emp.annualSalary) > 0 && (
-                      <div className="fixed-note" style={{marginTop:4}}>{money(Number(emp.annualSalary)/26)} per full period · prorated around a start / last day by weekdays (W-2) or calendar days (1099)</div>
+                      <div className="fixed-note" style={{marginTop:4}}>{money(Number(emp.annualSalary)/26)} per full period · prorated by weekdays around a start / last day</div>
                     )}
                   </div>
                 </div>
