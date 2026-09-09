@@ -1836,6 +1836,20 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
         return locked && created && created > selPeriod.lockAt.getTime();
       })
     : [];
+  // one readable line per late entry (who, work date, when it was logged, what, $) — stacked cards, so it
+  // reads on a phone without the wide roll-up table. Newest-logged first.
+  const [showLate, setShowLate] = useState(true);
+  const lateAfter = (h) => h < 1 ? Math.max(1, Math.round(h * 60)) + " min" : h < 48 ? Math.round(h) + " h" : Math.round(h / 24) + " d";
+  const lateRows = lateEntries.map(e => {
+    const emp = employees.find(x => x.id === e.empId);
+    const created = Number(e.id.split("_")[1]);
+    const parts = ALL_TYPES.filter(t => Number(e.counts?.[t.key]||0) > 0).map(t => `${e.counts[t.key]} ${t.label.toLowerCase()}`);
+    let amt = 0;
+    for (const t of ALL_TYPES) amt += Number(e.counts?.[t.key]||0) * (isFixed(t.key) ? t.rate : Number(emp?.rates?.[t.key]||0));
+    if (e.other && Number(e.other.amount) > 0) { amt += Number(e.other.amount); parts.push("Other " + money(Number(e.other.amount)) + (e.other.note ? " (" + e.other.note + ")" : "")); }
+    return { id: e.id, name: emp ? lastFirst(emp.name) : (e.username ? e.username + " (removed)" : e.empId), date: e.date, created,
+      after: lateAfter((created - selPeriod.lockAt.getTime()) / 3600000), parts, amt };
+  }).sort((a, b) => b.created - a.created);
 
   // ADP-ready CSV — SAME format/semantics as the biweekly payroll email (payroll-summary.mjs,
   // Shikha's 7/14 spec): W2 → salary as EXCLUDED + production as BONUS; 1099 → everything as
@@ -1978,13 +1992,28 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
       )}
 
       {lateEntries.length > 0 && (
-        <div className="card" style={{background:"var(--danger-soft)", border:"1px solid var(--danger)", marginBottom:18, padding:"12px 16px"}}>
-          <div style={{color:"var(--danger)", fontWeight:600, fontSize:14}}>
-            ⚠ {lateEntries.length} late {lateEntries.length===1?"entry":"entries"} added after this period locked
+        <div className="card late-card">
+          <div className="late-head">
+            <div style={{color:"var(--danger)", fontWeight:600, fontSize:14}}>
+              ⚠ {lateEntries.length} late {lateEntries.length===1?"entry":"entries"} added after this period locked · {money(lateRows.reduce((s, r) => s + r.amt, 0))}
+            </div>
+            <button className="btn btn-ghost" style={{padding:"4px 10px", fontSize:13}} onClick={()=>setShowLate(v=>!v)}>{showLate ? "Hide" : "Show"}</button>
           </div>
           <div style={{fontSize:13, color:"var(--danger)", marginTop:4}}>
-            These were logged after the lock cutoff and are included in the totals above. Review before paying — someone logged work for a period you may have already processed.
+            Logged after the lock cutoff and included in the totals below. Review before paying — this period may already have been processed.
           </div>
+          {showLate && (
+            <div className="late-list">
+              {lateRows.map(r => (
+                <div className="late-item" key={r.id}>
+                  <div className="late-who">{r.name}</div>
+                  <div className="late-amt">{money(r.amt)}</div>
+                  <div className="late-meta">Work dated <strong>{fmtShortYr(r.date)}</strong> · logged {new Date(r.created).toLocaleString(undefined, {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"})} · {r.after} after lock</div>
+                  <div className="late-what">{r.parts.length ? r.parts.join(", ") : "no counts"}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

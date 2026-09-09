@@ -187,6 +187,14 @@
   .empty { text-align: center; color: var(--faint); padding: 30px; font-size: 14px; }
   .tag { display:inline-block; font-size:11px; padding:2px 8px; border-radius:6px; background:var(--amber-soft); color:var(--amber); font-weight:500; margin-left:8px;}
   .scroll-x { overflow-x: auto; }
+  /* late entries (roll-up) — stacked cards so they read on a phone */
+  .late-card { background:var(--danger-soft); border:1px solid var(--danger); margin-bottom:18px; padding:12px 16px; }
+  .late-head { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+  .late-list { margin-top:10px; display:grid; gap:8px; }
+  .late-item { display:grid; grid-template-columns:1fr auto; gap:2px 10px; background:var(--surface); border:1px solid var(--danger); border-radius:8px; padding:8px 10px; font-size:13px; color:var(--ink); }
+  .late-who { font-weight:600; } .late-amt { font-weight:600; text-align:right; white-space:nowrap; }
+  .late-meta, .late-what { grid-column:1 / -1; color:var(--muted); font-size:12px; line-height:1.4; }
+  @media (max-width:600px) { .tabs { flex-wrap:wrap; width:auto; } .card { padding:14px; } .late-card { padding:10px 12px; } }
   .savebar { position: sticky; bottom: 0; background: linear-gradient(transparent, var(--bg) 40%); padding: 16px 0 4px; display:flex; gap:10px; justify-content:flex-end; }
 
   /* ----- pay-period day grid (calendar date picker) ----- */
@@ -328,6 +336,6 @@
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"
   integrity="sha384-HZZ/fukV+9G8gwTNjN7zQDG0Sp7MsZy5DDN6VfY3Be7V9dvQpEpR2jF2HlyFUUjU" crossorigin="anonymous"></script>
 
-<script defer src="app.js?v=d20ff6e3"></script>
+<script defer src="app.js?v=047394db"></script>
 </body>
 </html>
