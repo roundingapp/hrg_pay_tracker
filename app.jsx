@@ -88,6 +88,18 @@ const lastFirst = (name) => {
   const last = words.pop();
   return last + ", " + words.join(" ") + (creds.length ? " " + creds.join(" ") : "");
 };
+// ADMIN-ONLY label. People paid through a company carry roster `company` (their ADP payee name):
+// "Aya Advanced Practice LLC (Jagruti Patel)". Employee-side screens keep plain emp.name, and
+// scopedRosterFor strips `company` from every staff mirror.
+const adminName = (emp) => {
+  const c = String((emp && emp.company) || "").trim();
+  return c ? c + " (" + String(emp.name || "").trim() + ")" : lastFirst(emp && emp.name);
+};
+const adminSortKey = (emp) => {
+  const c = String((emp && emp.company) || "").trim();
+  return c ? c.toLowerCase() : lastNameKey(emp && emp.name);
+};
+const byAdminName = (a, b) => adminSortKey(a).localeCompare(adminSortKey(b));
 
 const money = n => "$" + (Math.round(n * 100) / 100).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
 // All date/period boundaries anchor to US CENTRAL time (the practice's timezone) — not the
@@ -416,8 +428,9 @@ async function loadVisibleAdminPto(uid) {
 const ptoRosterRow = (s) => { const o = { id: s.id, name: s.name, salaryOnly: !!s.salaryOnly }; if (s.ptoDays != null) o.ptoDays = s.ptoDays; if (s.startDate) o.startDate = s.startDate; return o; };
 function scopedRosterFor(emp, all, ptoApprover) {
   if (!emp) return [];
-  const out = [emp];
-  if (emp.isManager) for (const s of (all || [])) if (s && s.managedBy === emp.id) out.push(s);
+  const noCo = (s) => { const { company, ...rest } = s; return rest; };   // ADP company name is admin-only
+  const out = [noCo(emp)];
+  if (emp.isManager) for (const s of (all || [])) if (s && s.managedBy === emp.id) out.push(noCo(s));
   if (ptoApprover) for (const s of (all || [])) if (s && !out.some(x => x.id === s.id)) out.push(ptoRosterRow(s));
   return out;
 }
@@ -586,9 +599,9 @@ function PtoCalendar({ pto, allowance, startDate, onSubmit, onClose, onCancel, a
 // Admin PTO tab: approve/deny requests (single or batch), overlap flags, enter PTO on someone's behalf.
 function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
   const [addFor, setAddFor] = useState(null);
-  const nameOf = (empId) => { const e = employees.find(x => x.id === empId); return e ? lastFirst(e.name) : empId; };
+  const nameOf = (empId) => { const e = employees.find(x => x.id === empId); return e ? adminName(e) : empId; };
   // salary-only staff don't log pay, but they DO take PTO — include anyone with an allowance
-  const sortedEmps = employees.filter(e => !e.salaryOnly || Number(e.ptoDays) > 0).slice().sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
+  const sortedEmps = employees.filter(e => !e.salaryOnly || Number(e.ptoDays) > 0).slice().sort(byAdminName);
   const sm = { padding: "5px 11px", fontSize: 13 };
 
   // who's off (requested or approved) by date → overlap detection
@@ -605,13 +618,13 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
         <label>Enter PTO for someone (added as approved)</label>
         <select value="" onChange={e=>{ const emp = employees.find(x=>x.id===e.target.value); if (emp) setAddFor(emp); }} style={{maxWidth:340}}>
           <option value="">Choose an employee…</option>
-          {sortedEmps.map(e => <option key={e.id} value={e.id}>{lastFirst(e.name)}</option>)}
+          {sortedEmps.map(e => <option key={e.id} value={e.id}>{adminName(e)}</option>)}
         </select>
       </div>
       {addFor && <PtoCalendar pto={allPto.filter(r=>r.empId===addFor.id)} allowance={addFor.ptoDays} startDate={addFor.startDate}
         allowPast={true}
         onClose={()=>setAddFor(null)}
-        onSubmit={(sel)=>{ onAddPto(addFor, sel); setAddFor(null); showToast && showToast("PTO added for " + addFor.name); }} />}
+        onSubmit={(sel)=>{ onAddPto(addFor, sel); setAddFor(null); showToast && showToast("PTO added for " + adminName(addFor)); }} />}
 
       {/* ---- the ENTIRE PTO picture, per employee: allowance, used, pending, remaining,
               and every day (self-requested AND admin-entered) with inline actions ---- */}
@@ -620,7 +633,7 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
         {(() => {
           const withPto = employees
             .filter(e => Number(e.ptoDays) > 0 || (allPto || []).some(r => r.empId === e.id))
-            .sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
+            .sort(byAdminName);
           if (!withPto.length) return <div className="empty">No PTO allowances or records yet.</div>;
           return withPto.map(e => {
             const recs = (allPto || []).filter(r => r.empId === e.id)
@@ -639,7 +652,7 @@ function PtoAdmin({ employees, allPto, onSetStatus, onAddPto, showToast }) {
             return (
               <div className="pto-group" key={"sum"+e.id}>
                 <div className="pto-group-head">
-                  <strong>{lastFirst(e.name)}</strong>
+                  <strong>{adminName(e)}</strong>
                   <span className="pto-group-count">
                     {allow > 0 ? `${used} used of ${allow} · ${left} left` : `${used} used (no allowance set)`}
                     {pendDays > 0 ? ` · ${pendDays} pending` : ""}
@@ -1128,7 +1141,7 @@ function App() {
       {isOwner && impersonate && (
         <>
           <div className="impersonate-bar">
-            <span>👁 Viewing as <strong>{lastFirst(impersonate.name)}</strong>{impersonate.isManager ? " (office manager) — their staff page" : " — edits save to their record (audit)."}</span>
+            <span>👁 Viewing as <strong>{adminName(impersonate)}</strong>{impersonate.isManager ? " (office manager) — their staff page" : " — edits save to their record (audit)."}</span>
             <button className="btn" onClick={exitImpersonate}>Exit view</button>
           </div>
           {impersonate.isManager
@@ -1601,7 +1614,7 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, man
   const doRefresh = async () => { setRefreshing(true); try { await onRefresh(); } finally { setRefreshing(false); } };
   const syncLabel = syncedAt ? syncedAt.toLocaleTimeString([], { hour:"numeric", minute:"2-digit", second:"2-digit" }) : "—";
   const viewable = employees.filter(e => !e.salaryOnly)   // include office managers (view their staff page)
-    .slice().sort((a,b) => lastFirst(a.name).localeCompare(lastFirst(b.name)));
+    .slice().sort(byAdminName);
   return (
     <>
       <div style={{display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", justifyContent:"space-between", marginTop:"-6px", marginBottom:14}}>
@@ -1619,7 +1632,7 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, man
           {onViewAs && (
             <select value="" onChange={e=>{ const emp = viewable.find(x=>x.id===e.target.value); if (emp) onViewAs(emp); }} style={{maxWidth:240}}>
               <option value="">👁 View as employee…</option>
-              {viewable.map(e => <option key={e.id} value={e.id}>{lastFirst(e.name)}</option>)}
+              {viewable.map(e => <option key={e.id} value={e.id}>{adminName(e)}</option>)}
             </select>
           )}
         </div>
@@ -1762,7 +1775,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
   const totalOther = rows.reduce((s,r)=>s+r.otherAmt,0);
 
   // sortable roll-up table: click a header to sort (asc → desc → back to roster order)
-  const sortVal = (r, k) => k==="name" ? lastNameKey(r.emp.name)
+  const sortVal = (r, k) => k==="name" ? adminSortKey(r.emp)
     : k==="pay" ? r.pay : k==="base" ? r.base : k==="variable" ? r.variable : k==="bonus" ? r.bonus : k==="reimb" ? r.reimb : k==="stipend" ? r.stip : k==="other" ? r.otherAmt : (r.counts[k]||0);
   const sortedRows = sortKey
     ? [...rows].sort((a,b) => { const va=sortVal(a,sortKey), vb=sortVal(b,sortKey);
@@ -1798,7 +1811,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
       <td className="num">
         {editable
           ? <input className="cell-in" type="text" inputMode="decimal" value={cur}
-              onFocus={(e)=>guardEdit(e, key, (lastFirst(r.emp.name)||"This person") + " · " + label, cur)}
+              onFocus={(e)=>guardEdit(e, key, (adminName(r.emp)||"This person") + " · " + label, cur)}
               onChange={e=>setAdj(r.emp.id, field, e.target.value)} />
           : (eff ? money(eff) : "")}
       </td>
@@ -1811,7 +1824,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
       <td className="num cnt">
         {editable
           ? <input className="cell-in cnt-in" type="text" inputMode="numeric" value={cur}
-              onFocus={(e)=>guardEdit(e, key, (lastFirst(r.emp.name)||"This person") + " · " + label, cur)}
+              onFocus={(e)=>guardEdit(e, key, (adminName(r.emp)||"This person") + " · " + label, cur)}
               onChange={e=>setAdj(r.emp.id, "count."+t, e.target.value)} />
           : (r.counts[t] || "")}
       </td>
@@ -1847,7 +1860,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     let amt = 0;
     for (const t of ALL_TYPES) amt += Number(e.counts?.[t.key]||0) * (isFixed(t.key) ? t.rate : Number(emp?.rates?.[t.key]||0));
     if (e.other && Number(e.other.amount) > 0) { amt += Number(e.other.amount); parts.push("Other " + money(Number(e.other.amount)) + (e.other.note ? " (" + e.other.note + ")" : "")); }
-    return { id: e.id, name: emp ? lastFirst(emp.name) : (e.username ? e.username + " (removed)" : e.empId), date: e.date, created,
+    return { id: e.id, name: emp ? adminName(emp) : (e.username ? e.username + " (removed)" : e.empId), date: e.date, created,
       after: lateAfter((created - selPeriod.lockAt.getTime()) / 3600000), parts, amt };
   }).sort((a, b) => b.created - a.created);
 
@@ -1862,17 +1875,17 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
     const header = ["EMPLOYEE (ADP NAME)","TYPE","1099COMP AMOUNT","BONUS AMOUNT","EXCLUDED SALARY","TOTAL PAY"];
     const out = [header];
     let t1099 = 0, tBonus = 0, tExcl = 0;
-    const srows = [...rows].sort((a,b) => lastFirst(a.emp.name).localeCompare(lastFirst(b.emp.name)));
+    const srows = [...rows].sort((a,b) => byAdminName(a.emp, b.emp));
     for (const r of srows) {
       const taxType = r.removed ? "1099" : (r.emp.taxType || (r.base > 0 ? "w2" : "1099"));
-      if (r.pay === 0) { out.push([lastFirst(r.emp.name), "no pay", DASH, DASH, DASH, DASH]); continue; }
+      if (r.pay === 0) { out.push([adminName(r.emp), "no pay", DASH, DASH, DASH, DASH]); continue; }
       if (taxType === "w2") {
         const bonus = r.pay - r.base;
         tBonus += cents(bonus); tExcl += cents(r.base);
-        out.push([lastFirst(r.emp.name), "W2", DASH, bonus ? money(bonus) : DASH, r.base ? money(r.base) : DASH, money(r.pay)]);
+        out.push([adminName(r.emp), "W2", DASH, bonus ? money(bonus) : DASH, r.base ? money(r.base) : DASH, money(r.pay)]);
       } else {
         t1099 += cents(r.pay);
-        out.push([lastFirst(r.emp.name), "1099", money(r.pay), DASH, DASH, money(r.pay)]);
+        out.push([adminName(r.emp), "1099", money(r.pay), DASH, DASH, money(r.pay)]);
       }
     }
     out.push(["Total payroll", "", money(t1099/100), money(tBonus/100), money(tExcl/100), money(grand)]);
@@ -2044,7 +2057,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
           <tbody>
             {sortedRows.map(r => (
               <tr key={r.emp.id}>
-                <td style={{whiteSpace:"nowrap"}}>{lastFirst(r.emp.name)}</td>
+                <td style={{whiteSpace:"nowrap"}}>{adminName(r.emp)}</td>
                 <td className="num pay">{money(r.pay)}</td>
                 <td className="num" title={r.baseDays > 0 && r.baseDays < r.baseOf ? "Prorated: " + r.baseDays + " of " + r.baseOf + " weekdays in this period (start / last day)" : undefined}>
                   {r.base ? money(r.base) : ""}{r.baseDays > 0 && r.baseDays < r.baseOf ? <span className="hint-sm"> · {r.baseDays}/{r.baseOf}wd</span> : null}</td>
@@ -2099,7 +2112,7 @@ function Rollup({ employees, entries, salaries, adjustments, persistAdjustments,
               {rows.flatMap(r => r.otherNotes.map((o, i) => (
                 <tr key={r.emp.id+"-o"+i}>
                   <td style={{whiteSpace:"nowrap"}}>{fmtShortYr(o.date)}</td>
-                  <td style={{whiteSpace:"nowrap"}}>{lastFirst(r.emp.name)}</td>
+                  <td style={{whiteSpace:"nowrap"}}>{adminName(r.emp)}</td>
                   <td className="num pay">{money(o.amount)}</td>
                   <td>{o.note || "—"}</td>
                 </tr>
@@ -2168,6 +2181,10 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     setDraft(draft.map(e => e.id===id ? {...e, name: val} : e));
     markDirty();
   };
+  const setCompany = (id, val) => {
+    setDraft(draft.map(e => e.id===id ? {...e, company: val} : e));
+    markDirty();
+  };
   const setRole = (id, val) => {
     setDraft(draft.map(e => e.id===id ? {...e, role: val} : e));
     markDirty();
@@ -2187,7 +2204,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     return keys.map(k => ({
       key: k || "_unassigned",
       label: k === "" ? "Unassigned" : (ROLE_LABEL[k] || (k.charAt(0).toUpperCase() + k.slice(1))),
-      emps: by[k].slice().sort((a,b) => lastFirst(a.name||"").localeCompare(lastFirst(b.name||""))),
+      emps: by[k].slice().sort(byAdminName),
     }));
   })();
   const setUsername = (id, val) => {
@@ -2307,6 +2324,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       for (const t of VARIABLE) { const v = e.rates?.[t.key]; if (v !== "" && v != null && !isNaN(Number(v)) && Number(v) > 0) rates[t.key] = Number(v); }
       const out = { ...e, name: e.name.trim(), username: normU(e.username), email: String(e.email||"").trim().toLowerCase(), rates, fixedEligible: !!e.fixedEligible };
       if (e.role && String(e.role).trim()) out.role = String(e.role).trim(); else delete out.role;
+      if (e.company && String(e.company).trim()) out.company = String(e.company).trim(); else delete out.company;
       const annual = Number(e.annualSalary);
       if (annual > 0) salariesMap[e.id] = Math.round(annual);   // → owner-only salaries doc
       delete out.annualSalary;                                  // never store the amount in the employees record
@@ -2383,6 +2401,13 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
                     </div>
                   </div>
                 )}
+                <div className="field-row" style={{marginTop:12}}>
+                  <div>
+                    <label>ADP company (paid through)</label>
+                    <input type="text" value={emp.company ?? ""} autoComplete="off" placeholder="Leave blank if paid as themselves"
+                      onChange={e=>setCompany(emp.id, e.target.value)} />
+                  </div>
+                </div>
               </div>
 
               <div className="emp-section">
@@ -2528,7 +2553,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
           <div className="ename">
             <div className="emp-head" onClick={()=>toggleOpen(emp.id)}>
               <span className="emp-chev">{open ? "▾" : "▸"}</span>
-              <span className="emp-name-txt">{lastFirst(emp.name) || "Unnamed employee"}</span>
+              <span className="emp-name-txt">{adminName(emp) || "Unnamed employee"}</span>
               {!open && <span className={"emp-meta"+(meta.warn?" warn":"")}>{meta.user} · {meta.right}</span>}
             </div>
             {open && <button className="btn btn-danger" onClick={()=>removeEmp(emp.id)}>Remove</button>}
@@ -2573,7 +2598,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
 
 /* ---------- all entries (audit / delete) ---------- */
 function AllEntries({ employees, entries, deleteEntry, showToast }) {
-  const nameOf = e => { const m = employees.find(x=>x.id===e.empId); return m ? m.name : (e.username ? e.username + " (removed)" : "—"); };
+  const nameOf = e => { const m = employees.find(x=>x.id===e.empId); return m ? adminName(m) : (e.username ? e.username + " (removed)" : "—"); };
   const sorted = [...entries].sort((a,b)=> b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
 
   const del = async (entry) => {
@@ -2604,7 +2629,7 @@ function AllEntries({ employees, entries, deleteEntry, showToast }) {
               return (
                 <tr key={(e._uid||"")+e.id}>
                   <td style={{whiteSpace:"nowrap"}}>{e.date}</td>
-                  <td>{lastFirst(nameOf(e))}</td>
+                  <td>{nameOf(e)}</td>
                   <td style={{color:"var(--muted)"}}>{summarize(e)}</td>
                   <td className="num pay">{money(payForEntry(emp, e))}</td>
                   <td style={{textAlign:"right"}}><button className="btn btn-danger" style={{padding:"5px 12px"}} onClick={()=>del(e)}>Delete</button></td>
