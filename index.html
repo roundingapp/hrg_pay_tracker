@@ -319,7 +319,7 @@
     experimentalAutoDetectLongPolling: true,
     localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
   });
-  window._fs = { doc, getDoc, setDoc, collection, getDocs, onSnapshot };
+  window._fs = { doc, getDoc, getDocFromServer, setDoc, collection, getDocs, onSnapshot };
   window._auth = getAuth(app);
   window._authfns = { onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail };
   window._firebaseReady = true;
@@ -336,6 +336,6 @@
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"
   integrity="sha384-HZZ/fukV+9G8gwTNjN7zQDG0Sp7MsZy5DDN6VfY3Be7V9dvQpEpR2jF2HlyFUUjU" crossorigin="anonymous"></script>
 
-<script defer src="app.js?v=cd20e11d"></script>
+<script defer src="app.js?v=7d986a77"></script>
 </body>
 </html>

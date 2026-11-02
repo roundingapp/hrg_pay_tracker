@@ -330,7 +330,7 @@ async function loadSalaries() {
     const snap = await window._fs.getDoc(ref);
     if (snap.exists() && snap.data() && snap.data().value) return snap.data().value;
     return {};
-  } catch (e) { return {}; }
+  } catch (e) { console.error("salaries read failed", e); return null; }   // null = UNKNOWN, not empty
 }
 async function saveSalaries(map) {
   try {
@@ -362,7 +362,7 @@ async function loadAdjustments() {
     const ref = window._fs.doc(window._db, "paytracker_entries", ADJ_DOC);
     const snap = await window._fs.getDoc(ref);
     return (snap.exists() && snap.data() && snap.data().value) || {};
-  } catch (e) { return {}; }
+  } catch (e) { console.error("adjustments read failed", e); return null; }   // null = UNKNOWN, not empty
 }
 async function saveAdjustments(map) {
   try {
@@ -414,14 +414,21 @@ async function saveMyMirror(uid, roster, adminPto, isManager) {
 // Try the shared roster first (only the owner passes — rules are owner-only, managers too);
 // everyone else is denied and silently falls back to their own mirrored record (which for a
 // manager includes their managed staff). Quiet catch so non-owners don't log errors.
-async function loadVisibleRoster(uid) {
+// The OWNER never falls back: their mirror is a 1-person roster, and the Rates tab autosaves the
+// whole list — a flaky read (11/2/26, LTE) showed Neil alone, one edit away from wiping all staff.
+// Owner failure returns null = "unknown"; refresh keeps the last good roster and retries.
+async function loadVisibleRoster(uid, owner) {
   try {
     const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker", "employees"));
     const v = snap.exists() && snap.data() && snap.data().value;
     if (Array.isArray(v) && v.length) return v;
-  } catch (e) {}
+  } catch (e) { if (owner) console.error("roster read failed", e); }
+  if (owner) return null;
   return (await loadMyRoster(uid)) || [];
 }
+// Owner whole-doc writes (roster/salaries/adjustments) are refused unless the state being saved
+// was built from a successful server read of that doc. Set in refresh / the live roster listener.
+const OWNER_LOADED = { employees: false, salaries: false, adjustments: false };
 async function loadVisibleAdminPto(uid) {
   try {
     const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker", "ptoAdmin"));
@@ -728,8 +735,11 @@ function App() {
   const [manualLocks, setManualLocks] = useState([]);
   const [manualUnlocks, setManualUnlocks] = useState([]);   // admin force-unlocks that override the auto-lock
   const [toast, setToast] = useState("");
+  const [loadError, setLoadError] = useState("");   // owner whole-doc read failed — shown, edits refused
 
   const isOwner = isOwnerUser(authUser);
+  const employeesRef = useRef(employees);   // the roster this screen actually loaded (persistEmployees' pre-save check)
+  useEffect(() => { employeesRef.current = employees; }, [employees]);
   const uid = authUser ? authUser.uid : null;
   // the signed-in NP's own employee record, matched by their real email or internal login email
   const myEmp = (authUser && !isOwner)
@@ -761,7 +771,7 @@ function App() {
       const owner = isOwnerUser(u);
       // fire every read at once (they're independent) — was 8 sequential round-trips
       const [emps, locks, unlocks, entries, certs, salaries, mySalary, adjustments, myAdj, myPto, everyPto, adminPto] = await Promise.all([
-        loadVisibleRoster(u.uid),        // owner: full roster; everyone else (incl. managers): own mirror
+        loadVisibleRoster(u.uid, owner), // owner: full roster (null on failure); everyone else (incl. managers): own mirror
         sGet("manualLocks", []),
         sGet("manualUnlocks", []),
         owner ? loadAllEntries() : loadEntriesForUid(u.uid),
@@ -777,19 +787,25 @@ function App() {
       // only touch state that actually changed — an unchanged pull must not re-render, because
       // browsers close/reset an open <select> (the View-as picker) when its options are rebuilt
       const setIfChanged = (setter, next) => setter(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
-      setIfChanged(setEmployees, emps && emps.length ? emps : []);
+      // owner reads that FAILED (null) leave the last good state alone — never replace it with empty
+      const failed = [];
+      if (owner && emps === null) failed.push("roster");
+      else { setIfChanged(setEmployees, emps && emps.length ? emps : []); if (owner) OWNER_LOADED.employees = true; }
       setIfChanged(setManualLocks, Array.isArray(locks) ? locks : []);
       setIfChanged(setManualUnlocks, Array.isArray(unlocks) ? unlocks : []);
       setIfChanged(setEntries, entries);
       setIfChanged(setCerts, certs);
-      setIfChanged(setSalaries, salaries);
+      if (owner && salaries === null) failed.push("salaries");
+      else { setIfChanged(setSalaries, salaries || {}); if (owner) OWNER_LOADED.salaries = true; }
       setMySalary(mySalary);
-      setIfChanged(setAdjustments, adjustments);
+      if (owner && adjustments === null) failed.push("bonuses");
+      else { setIfChanged(setAdjustments, adjustments || {}); if (owner) OWNER_LOADED.adjustments = true; }
       setIfChanged(setMyAdj, myAdj);
       setIfChanged(setPto, Array.isArray(myPto) ? myPto : []);
       setIfChanged(setAllPto, Array.isArray(everyPto) ? everyPto : []);
       setIfChanged(setPtoAdmin, adminPto && typeof adminPto === "object" ? adminPto : {});
-      setSyncedAt(new Date());     // mark data as freshly pulled
+      if (failed.length) setLoadError("Couldn't load " + failed.join(", ") + " — retrying. Edits are blocked until it loads.");
+      else { setLoadError(""); setSyncedAt(new Date()); }   // mark data as freshly pulled (only when ALL of it was)
     } finally { refreshBusy.current = false; }
   }, []);
 
@@ -823,6 +839,7 @@ function App() {
     const unsub = window._fs.onSnapshot(ref, (snap) => {
       const v = snap.exists() && snap.data() ? snap.data().value : [];
       const next = Array.isArray(v) ? v : [];
+      if (next.length) OWNER_LOADED.employees = true;
       // skip no-op snapshots (cache→server echoes) so an open View-as picker isn't reset
       setEmployees(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
     }, () => {});   // on listener error, the 60s heartbeat still covers it
@@ -886,6 +903,21 @@ function App() {
   }, [isOwner, entries, salaries, adjustments, allPto, employees, ptoAdmin]);
 
   const persistEmployees = useCallback(async (next) => {
+    // FAIL CLOSED: this overwrites the whole shared roster. Refuse unless the list being saved was
+    // built from a real server load, and re-read the server copy now: any person on the server that
+    // is neither in what this screen loaded nor in what it's saving would be silently deleted.
+    if (!OWNER_LOADED.employees) { showToast("Roster not loaded — nothing saved. Retrying…"); refresh(); return false; }
+    let server;
+    try {
+      const snap = await window._fs.getDocFromServer(window._fs.doc(window._db, "paytracker", "employees"));
+      server = (snap.exists() && snap.data() && snap.data().value) || [];
+    } catch (e) { console.error("roster pre-save read failed", e); showToast("Can't reach server — nothing saved. Try again."); return false; }
+    const seen = new Set([...employeesRef.current, ...next].map(e => e && e.id));
+    const unseen = (Array.isArray(server) ? server : []).filter(e => e && !seen.has(e.id));
+    if (unseen.length) {
+      console.error("roster save refused — would drop", unseen.map(e => e.name));
+      showToast("Roster changed elsewhere — nothing saved. Reloading…"); refresh(); return false;
+    }
     setEmployees(next);
     await sSet("employees", next);
     // keep the public roster (usernames + managed list only — NO emails) in sync so tooling stays current
@@ -896,13 +928,15 @@ function App() {
       if (docId && !String(docId).startsWith("emp_"))
         await saveMyMirror(docId, scopedRosterFor(e, next, isPtoAdminUid(docId)), scopedAdminPtoFor(e, next, ptoAdmin, isPtoAdminUid(docId)), !!e.isManager);
     }
-  }, [entries, ptoAdmin]);
+    return true;
+  }, [entries, ptoAdmin, refresh, showToast]);
   // mirrors only go to REAL login docs (never legacy emp_-keyed docs staff can't read)
   const mirrorTarget = useCallback((empId) => {
     const docId = ownDocForEmp(empId, entries);
     return docId && !String(docId).startsWith("emp_") ? docId : null;
   }, [entries]);
   const persistSalaries = useCallback(async (map) => {
+    if (!OWNER_LOADED.salaries) { showToast("Salaries not loaded — nothing saved. Retrying…"); refresh(); return false; }
     setSalaries(map);
     await saveSalaries(map);
     // mirror each person's own salary into their own entries doc so they can see their Base
@@ -910,8 +944,9 @@ function App() {
       const docId = mirrorTarget(empId);
       if (docId) await saveMySalary(docId, annual);
     }
-  }, [mirrorTarget]);
+  }, [mirrorTarget, refresh, showToast]);
   const persistAdjustments = useCallback(async (map) => {
+    if (!OWNER_LOADED.adjustments) { showToast("Bonuses not loaded — nothing saved. Retrying…"); refresh(); return false; }
     setAdjustments(map);
     await saveAdjustments(map);
     // mirror each person's own bonus/reimbursement into their doc so they see it in their breakdown
@@ -929,7 +964,7 @@ function App() {
       const docId = mirrorTarget(empId);
       if (docId) await saveMyAdj(docId, perPeriod);
     }
-  }, [mirrorTarget]);
+  }, [mirrorTarget, refresh, showToast]);
   // owner or the delegated PTO approver approves (status→approved) or denies (removes) PTO requests.
   // items = [{_uid, id}] for self-requested records, [{_admin:true, empId, id}] for admin-entered.
   const setPtoStatus = useCallback(async (items, newStatus) => {
@@ -1172,7 +1207,7 @@ function App() {
         <OwnerView employees={employees} entries={entries} salaries={salaries} adjustments={adjustments} manualLocks={manualLocks} manualUnlocks={manualUnlocks} setPeriodLock={setPeriodLock}
           persistEmployees={persistEmployees} persistSalaries={persistSalaries} persistAdjustments={persistAdjustments} deleteEntry={deleteOwnerEntry}
           allPto={allPtoMerged} onSetPtoStatus={setPtoStatus} onAddPto={addPtoForEmployee}
-          onViewAs={startImpersonate} syncedAt={syncedAt} onRefresh={refresh} showToast={showToast} />
+          onViewAs={startImpersonate} syncedAt={syncedAt} loadError={loadError} onRefresh={refresh} showToast={showToast} />
       )}
 
       {/* signed in as staff/manager → scoped entry screen. The delegated PTO approver
@@ -1617,7 +1652,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
 }
 
 /* ---------- owner view ---------- */
-function OwnerView({ employees, entries, salaries, adjustments, manualLocks, manualUnlocks, setPeriodLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, allPto, onSetPtoStatus, onAddPto, onViewAs, syncedAt, onRefresh, showToast }) {
+function OwnerView({ employees, entries, salaries, adjustments, manualLocks, manualUnlocks, setPeriodLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, allPto, onSetPtoStatus, onAddPto, onViewAs, syncedAt, loadError, onRefresh, showToast }) {
   const [sub, setSub] = useState("rollup");
   const [refreshing, setRefreshing] = useState(false);
   const doRefresh = async () => { setRefreshing(true); try { await onRefresh(); } finally { setRefreshing(false); } };
@@ -1638,6 +1673,7 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, man
             <span title="Data is pulled live from the server on every load, on a 60s heartbeat, and whenever you return to the tab.">Synced {syncLabel}</span>
             <button className="btn btn-ghost" title="Refresh" aria-label="Refresh" style={{padding:"4px 10px", fontSize:16, lineHeight:1}} onClick={doRefresh} disabled={refreshing}>↻</button>
           </div>
+          {loadError && <div role="alert" style={{flexBasis:"100%", fontSize:13, color:"#b42318", fontWeight:600}}>⚠ {loadError}</div>}
           {onViewAs && (
             <select value="" onChange={e=>{ const emp = viewable.find(x=>x.id===e.target.value); if (emp) onViewAs(emp); }} style={{maxWidth:240}}>
               <option value="">👁 View as employee…</option>
@@ -2148,6 +2184,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   const [openIds, setOpenIds] = useState(() => new Set());   // expanded employee rows; default collapsed
   const [dirty, setDirty] = useState(false);     // unsaved local changes? drives the Save button
   const [saving, setSaving] = useState(false);
+  const [notSaved, setNotSaved] = useState(false);   // last save was REFUSED (roster/salaries not loaded)
   const savingRef = useRef(false);               // a save is in flight — parent state updates mid-save must not rebuild the draft
   const [modalId, setModalId] = useState(null);  // employee being edited in the "Add employee" popup
   const listRef = useRef(null);
@@ -2161,7 +2198,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   // Also skipped while a save is in flight: persistEmployees() sets `employees` BEFORE persistSalaries() sets
   // `salaries`, so merging at that moment rebuilt the draft with the PRE-save salary map — the salary the
   // user had just typed vanished, and the next autosave then deleted it from the salaries doc for real.
-  useEffect(() => { if (!dirtyR.current && !savingRef.current) setDraft(mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salariesRef.current)); }, [employees, salaries]);
+  useEffect(() => { if (!dirtyR.current && !savingRef.current) { setDraft(mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salariesRef.current)); } }, [employees, salaries]);
 
   // (roster order is now derived: grouped by role, alphabetical within — no manual drag-to-reorder)
 
@@ -2366,7 +2403,10 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   const persistClean = async (clean, salariesMap) => {
     setSaving(true); savingRef.current = true; markClean();
     salariesRef.current = salariesMap;   // any merge that does run sees the salaries being saved, never the stale pre-save map
-    try { await persistEmployees(clean); await persistSalaries(salariesMap); }
+    try {
+      const ok = (await persistEmployees(clean)) !== false && (await persistSalaries(salariesMap)) !== false;
+      setNotSaved(!ok);   // refused (not loaded / changed elsewhere) → sticky until a save succeeds
+    }
     finally { savingRef.current = false; setSaving(false); }
   };
   const save = async (sourceArr) => {        // explicit/manual (surfaces validation errors)
@@ -2597,7 +2637,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
       {draft.length>0 && (
         <div className="actions" style={{justifyContent:"flex-end", alignItems:"center"}}>
           <span style={{fontSize:13, fontWeight:500, color: blockReason ? "var(--amber)" : "var(--accent-ink)"}}>
-            {saving ? "Saving…" : blockReason ? blockReason : dirty ? "Saving…" : "✓ All changes saved"}
+            {saving ? "Saving…" : blockReason ? blockReason : dirty ? "Saving…" : notSaved ? "⚠ Last change NOT saved — re-enter it" : "✓ All changes saved"}
           </span>
         </div>
       )}

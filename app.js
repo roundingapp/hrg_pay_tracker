@@ -310,7 +310,8 @@ async function loadSalaries() {
     if (snap.exists() && snap.data() && snap.data().value) return snap.data().value;
     return {};
   } catch (e) {
-    return {};
+    console.error("salaries read failed", e);
+    return null;
   }
 }
 async function saveSalaries(map) {
@@ -349,7 +350,8 @@ async function loadAdjustments() {
     const snap = await window._fs.getDoc(ref);
     return snap.exists() && snap.data() && snap.data().value || {};
   } catch (e) {
-    return {};
+    console.error("adjustments read failed", e);
+    return null;
   }
 }
 async function saveAdjustments(map) {
@@ -408,15 +410,18 @@ async function saveMyMirror(uid, roster, adminPto, isManager) {
     return false;
   }
 }
-async function loadVisibleRoster(uid) {
+async function loadVisibleRoster(uid, owner) {
   try {
     const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker", "employees"));
     const v = snap.exists() && snap.data() && snap.data().value;
     if (Array.isArray(v) && v.length) return v;
   } catch (e) {
+    if (owner) console.error("roster read failed", e);
   }
+  if (owner) return null;
   return await loadMyRoster(uid) || [];
 }
+const OWNER_LOADED = { employees: false, salaries: false, adjustments: false };
 async function loadVisibleAdminPto(uid) {
   try {
     const snap = await window._fs.getDoc(window._fs.doc(window._db, "paytracker", "ptoAdmin"));
@@ -652,7 +657,12 @@ function App() {
   const [manualLocks, setManualLocks] = useState([]);
   const [manualUnlocks, setManualUnlocks] = useState([]);
   const [toast, setToast] = useState("");
+  const [loadError, setLoadError] = useState("");
   const isOwner = isOwnerUser(authUser);
+  const employeesRef = useRef(employees);
+  useEffect(() => {
+    employeesRef.current = employees;
+  }, [employees]);
   const uid = authUser ? authUser.uid : null;
   const myEmp = authUser && !isOwner ? employees.find((e) => {
     const ae = String(authUser.email || "").toLowerCase();
@@ -680,8 +690,8 @@ function App() {
     try {
       const owner = isOwnerUser(u);
       const [emps, locks, unlocks, entries2, certs2, salaries2, mySalary2, adjustments2, myAdj2, myPto, everyPto, adminPto] = await Promise.all([
-        loadVisibleRoster(u.uid),
-        // owner: full roster; everyone else (incl. managers): own mirror
+        loadVisibleRoster(u.uid, owner),
+        // owner: full roster (null on failure); everyone else (incl. managers): own mirror
         sGet("manualLocks", []),
         sGet("manualUnlocks", []),
         owner ? loadAllEntries() : loadEntriesForUid(u.uid),
@@ -698,19 +708,36 @@ function App() {
         // owner: all admin PTO; NP: own scoped mirror
       ]);
       const setIfChanged = (setter, next) => setter((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
-      setIfChanged(setEmployees, emps && emps.length ? emps : []);
+      const failed = [];
+      if (owner && emps === null) failed.push("roster");
+      else {
+        setIfChanged(setEmployees, emps && emps.length ? emps : []);
+        if (owner) OWNER_LOADED.employees = true;
+      }
       setIfChanged(setManualLocks, Array.isArray(locks) ? locks : []);
       setIfChanged(setManualUnlocks, Array.isArray(unlocks) ? unlocks : []);
       setIfChanged(setEntries, entries2);
       setIfChanged(setCerts, certs2);
-      setIfChanged(setSalaries, salaries2);
+      if (owner && salaries2 === null) failed.push("salaries");
+      else {
+        setIfChanged(setSalaries, salaries2 || {});
+        if (owner) OWNER_LOADED.salaries = true;
+      }
       setMySalary(mySalary2);
-      setIfChanged(setAdjustments, adjustments2);
+      if (owner && adjustments2 === null) failed.push("bonuses");
+      else {
+        setIfChanged(setAdjustments, adjustments2 || {});
+        if (owner) OWNER_LOADED.adjustments = true;
+      }
       setIfChanged(setMyAdj, myAdj2);
       setIfChanged(setPto, Array.isArray(myPto) ? myPto : []);
       setIfChanged(setAllPto, Array.isArray(everyPto) ? everyPto : []);
       setIfChanged(setPtoAdmin, adminPto && typeof adminPto === "object" ? adminPto : {});
-      setSyncedAt(/* @__PURE__ */ new Date());
+      if (failed.length) setLoadError("Couldn't load " + failed.join(", ") + " \u2014 retrying. Edits are blocked until it loads.");
+      else {
+        setLoadError("");
+        setSyncedAt(/* @__PURE__ */ new Date());
+      }
     } finally {
       refreshBusy.current = false;
     }
@@ -749,6 +776,7 @@ function App() {
     const unsub = window._fs.onSnapshot(ref, (snap) => {
       const v = snap.exists() && snap.data() ? snap.data().value : [];
       const next = Array.isArray(v) ? v : [];
+      if (next.length) OWNER_LOADED.employees = true;
       setEmployees((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
     }, () => {
     });
@@ -808,6 +836,28 @@ function App() {
     });
   }, [isOwner, entries, salaries, adjustments, allPto, employees, ptoAdmin]);
   const persistEmployees = useCallback(async (next) => {
+    if (!OWNER_LOADED.employees) {
+      showToast("Roster not loaded \u2014 nothing saved. Retrying\u2026");
+      refresh();
+      return false;
+    }
+    let server;
+    try {
+      const snap = await window._fs.getDocFromServer(window._fs.doc(window._db, "paytracker", "employees"));
+      server = snap.exists() && snap.data() && snap.data().value || [];
+    } catch (e) {
+      console.error("roster pre-save read failed", e);
+      showToast("Can't reach server \u2014 nothing saved. Try again.");
+      return false;
+    }
+    const seen = new Set([...employeesRef.current, ...next].map((e) => e && e.id));
+    const unseen = (Array.isArray(server) ? server : []).filter((e) => e && !seen.has(e.id));
+    if (unseen.length) {
+      console.error("roster save refused \u2014 would drop", unseen.map((e) => e.name));
+      showToast("Roster changed elsewhere \u2014 nothing saved. Reloading\u2026");
+      refresh();
+      return false;
+    }
     setEmployees(next);
     await sSet("employees", next);
     await savePublicRoster(next);
@@ -816,20 +866,31 @@ function App() {
       if (docId && !String(docId).startsWith("emp_"))
         await saveMyMirror(docId, scopedRosterFor(e, next, isPtoAdminUid(docId)), scopedAdminPtoFor(e, next, ptoAdmin, isPtoAdminUid(docId)), !!e.isManager);
     }
-  }, [entries, ptoAdmin]);
+    return true;
+  }, [entries, ptoAdmin, refresh, showToast]);
   const mirrorTarget = useCallback((empId) => {
     const docId = ownDocForEmp(empId, entries);
     return docId && !String(docId).startsWith("emp_") ? docId : null;
   }, [entries]);
   const persistSalaries = useCallback(async (map) => {
+    if (!OWNER_LOADED.salaries) {
+      showToast("Salaries not loaded \u2014 nothing saved. Retrying\u2026");
+      refresh();
+      return false;
+    }
     setSalaries(map);
     await saveSalaries(map);
     for (const [empId, annual] of Object.entries(map)) {
       const docId = mirrorTarget(empId);
       if (docId) await saveMySalary(docId, annual);
     }
-  }, [mirrorTarget]);
+  }, [mirrorTarget, refresh, showToast]);
   const persistAdjustments = useCallback(async (map) => {
+    if (!OWNER_LOADED.adjustments) {
+      showToast("Bonuses not loaded \u2014 nothing saved. Retrying\u2026");
+      refresh();
+      return false;
+    }
     setAdjustments(map);
     await saveAdjustments(map);
     const byEmp = {};
@@ -843,7 +904,7 @@ function App() {
       const docId = mirrorTarget(empId);
       if (docId) await saveMyAdj(docId, perPeriod);
     }
-  }, [mirrorTarget]);
+  }, [mirrorTarget, refresh, showToast]);
   const setPtoStatus = useCallback(async (items, newStatus) => {
     const adminItems = items.filter((it) => it._admin);
     const regItems = items.filter((it) => !it._admin);
@@ -1091,6 +1152,7 @@ function App() {
       onAddPto: addPtoForEmployee,
       onViewAs: startImpersonate,
       syncedAt,
+      loadError,
       onRefresh: refresh,
       showToast
     }
@@ -1427,7 +1489,7 @@ function EntryView({ emp, entries, upsertEntry, certs, certifyPeriod, manualLock
     markEntryDirty();
   } }, "Clear"))));
 }
-function OwnerView({ employees, entries, salaries, adjustments, manualLocks, manualUnlocks, setPeriodLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, allPto, onSetPtoStatus, onAddPto, onViewAs, syncedAt, onRefresh, showToast }) {
+function OwnerView({ employees, entries, salaries, adjustments, manualLocks, manualUnlocks, setPeriodLock, persistEmployees, persistSalaries, persistAdjustments, deleteEntry, allPto, onSetPtoStatus, onAddPto, onViewAs, syncedAt, loadError, onRefresh, showToast }) {
   const [sub, setSub] = useState("rollup");
   const [refreshing, setRefreshing] = useState(false);
   const doRefresh = async () => {
@@ -1443,7 +1505,7 @@ function OwnerView({ employees, entries, salaries, adjustments, manualLocks, man
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", marginTop: "-6px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { className: "tabs", style: { margin: 0 } }, /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "rollup" ? " active" : ""), onClick: () => setSub("rollup") }, "Roll-up"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "rates" ? " active" : ""), onClick: () => setSub("rates") }, "Employees & rates"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "entries" ? " active" : ""), onClick: () => setSub("entries") }, "All entries"), /* @__PURE__ */ React.createElement("button", { className: "tab" + (sub === "pto" ? " active" : ""), onClick: () => setSub("pto") }, "PTO", (() => {
     const n = (allPto || []).filter((r) => r.status === "requested").length;
     return n ? " (" + n + ")" : "";
-  })())), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" } }, /* @__PURE__ */ React.createElement("span", { title: "Data is pulled live from the server on every load, on a 60s heartbeat, and whenever you return to the tab." }, "Synced ", syncLabel), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", title: "Refresh", "aria-label": "Refresh", style: { padding: "4px 10px", fontSize: 16, lineHeight: 1 }, onClick: doRefresh, disabled: refreshing }, "\u21BB")), onViewAs && /* @__PURE__ */ React.createElement("select", { value: "", onChange: (e) => {
+  })())), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" } }, /* @__PURE__ */ React.createElement("span", { title: "Data is pulled live from the server on every load, on a 60s heartbeat, and whenever you return to the tab." }, "Synced ", syncLabel), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", title: "Refresh", "aria-label": "Refresh", style: { padding: "4px 10px", fontSize: 16, lineHeight: 1 }, onClick: doRefresh, disabled: refreshing }, "\u21BB")), loadError && /* @__PURE__ */ React.createElement("div", { role: "alert", style: { flexBasis: "100%", fontSize: 13, color: "#b42318", fontWeight: 600 } }, "\u26A0 ", loadError), onViewAs && /* @__PURE__ */ React.createElement("select", { value: "", onChange: (e) => {
     const emp = viewable.find((x) => x.id === e.target.value);
     if (emp) onViewAs(emp);
   }, style: { maxWidth: 240 } }, /* @__PURE__ */ React.createElement("option", { value: "" }, "\u{1F441} View as employee\u2026"), viewable.map((e) => /* @__PURE__ */ React.createElement("option", { key: e.id, value: e.id }, adminName(e)))))), sub === "rollup" && /* @__PURE__ */ React.createElement(Rollup, { employees, entries, salaries, adjustments, persistAdjustments, manualLocks, manualUnlocks, setPeriodLock, showToast }), sub === "rates" && /* @__PURE__ */ React.createElement(Rates, { employees, salaries, persistEmployees, persistSalaries, showToast }), sub === "entries" && /* @__PURE__ */ React.createElement(AllEntries, { employees, entries, deleteEntry, showToast }), sub === "pto" && /* @__PURE__ */ React.createElement(PtoAdmin, { employees, allPto, onSetStatus: onSetPtoStatus, onAddPto, showToast }));
@@ -1807,6 +1869,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
   const [openIds, setOpenIds] = useState(() => /* @__PURE__ */ new Set());
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [notSaved, setNotSaved] = useState(false);
   const savingRef = useRef(false);
   const [modalId, setModalId] = useState(null);
   const listRef = useRef(null);
@@ -1824,7 +1887,9 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     draftRef.current = draft;
   }, [draft]);
   useEffect(() => {
-    if (!dirtyR.current && !savingRef.current) setDraft(mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salariesRef.current));
+    if (!dirtyR.current && !savingRef.current) {
+      setDraft(mergeSalaryDraft(JSON.parse(JSON.stringify(employees)), salariesRef.current));
+    }
   }, [employees, salaries]);
   const addEmp = () => {
     const name = newName.trim();
@@ -2067,8 +2132,8 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     markClean();
     salariesRef.current = salariesMap;
     try {
-      await persistEmployees(clean);
-      await persistSalaries(salariesMap);
+      const ok = await persistEmployees(clean) !== false && await persistSalaries(salariesMap) !== false;
+      setNotSaved(!ok);
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -2209,7 +2274,7 @@ function Rates({ employees, salaries, persistEmployees, persistSalaries, showToa
     const emp = draft.find((e) => e.id === modalId);
     if (!emp) return null;
     return /* @__PURE__ */ React.createElement("div", { className: "modal-backdrop", onClick: () => setModalId(null) }, /* @__PURE__ */ React.createElement("div", { className: "modal emp-modal", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { className: "pto-head" }, /* @__PURE__ */ React.createElement("h3", null, "Add employee"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost", onClick: cancelNewEmp }, "Cancel")), editorFor(emp), /* @__PURE__ */ React.createElement("div", { className: "modal-actions", style: { marginTop: 14, alignItems: "center", justifyContent: "space-between" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 500, color: blockReason ? "var(--amber)" : "var(--accent-ink)" } }, saving ? "Saving\u2026" : blockReason ? blockReason : dirty ? "Saving\u2026" : "\u2713 Saved"), /* @__PURE__ */ React.createElement("button", { className: "btn", onClick: () => setModalId(null) }, "Done"))));
-  })(), draft.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "actions", style: { justifyContent: "flex-end", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 500, color: blockReason ? "var(--amber)" : "var(--accent-ink)" } }, saving ? "Saving\u2026" : blockReason ? blockReason : dirty ? "Saving\u2026" : "\u2713 All changes saved")));
+  })(), draft.length > 0 && /* @__PURE__ */ React.createElement("div", { className: "actions", style: { justifyContent: "flex-end", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 500, color: blockReason ? "var(--amber)" : "var(--accent-ink)" } }, saving ? "Saving\u2026" : blockReason ? blockReason : dirty ? "Saving\u2026" : notSaved ? "\u26A0 Last change NOT saved \u2014 re-enter it" : "\u2713 All changes saved")));
 }
 function AllEntries({ employees, entries, deleteEntry, showToast }) {
   const nameOf = (e) => {
