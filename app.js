@@ -231,16 +231,24 @@ async function saveCertForUid(uid, periodIdx, cap, atISO) {
   }
 }
 let UID_BY_EMP = {};
+let DOC_OWNER = {};
 const resolveUidForEmp = (empId, entries) => UID_BY_EMP[empId] || ((entries || []).find((e) => e.empId === empId) || {})._uid || null;
+const ownDocForEmp = (empId, entries) => {
+  const d = resolveUidForEmp(empId, entries);
+  return d && (!DOC_OWNER[d] || DOC_OWNER[d] === empId) ? d : null;
+};
 async function loadAllEntries() {
   try {
     const snap = await window._fs.getDocs(window._fs.collection(window._db, "paytracker_entries"));
-    const all = [], byEntries = {}, byMarker = {};
+    const all = [], byEntries = {}, byMarker = {}, owner = {};
     snap.forEach((d) => {
       if (d.id === SALARY_DOC || d.id === ADJ_DOC) return;
       const data = d.data() || {};
       const isEmpDoc = String(d.id).startsWith("emp_");
-      if (data.empId && !isEmpDoc) byMarker[data.empId] = d.id;
+      if (data.empId && !isEmpDoc) {
+        byMarker[data.empId] = d.id;
+        owner[d.id] = data.empId;
+      }
       const v = data.value;
       if (!Array.isArray(v)) return;
       if (!isEmpDoc) v.forEach((e) => {
@@ -249,6 +257,7 @@ async function loadAllEntries() {
       v.forEach((e) => all.push({ ...e, _uid: d.id }));
     });
     UID_BY_EMP = { ...byEntries, ...byMarker };
+    DOC_OWNER = owner;
     return all;
   } catch (e) {
     console.error("all-entries read failed", e);
@@ -770,10 +779,10 @@ function App() {
     if (!entries.length && !Object.keys(salaries || {}).length) return;
     healedRef.current = true;
     const uidOf = (empId) => {
-      const viaReg = resolveUidForEmp(empId, entries);
+      const viaReg = ownDocForEmp(empId, entries);
       if (viaReg && !String(viaReg).startsWith("emp_")) return viaReg;
       const viaPto = (allPto.find((r) => r.empId === empId && r._uid && !String(r._uid).startsWith("emp_")) || {})._uid;
-      return viaPto || null;
+      return viaPto && (!DOC_OWNER[viaPto] || DOC_OWNER[viaPto] === empId) ? viaPto : null;
     };
     (async () => {
       for (const [empId, annual] of Object.entries(salaries || {})) {
@@ -803,13 +812,13 @@ function App() {
     await sSet("employees", next);
     await savePublicRoster(next);
     for (const e of next) {
-      const docId = resolveUidForEmp(e.id, entries);
+      const docId = ownDocForEmp(e.id, entries);
       if (docId && !String(docId).startsWith("emp_"))
         await saveMyMirror(docId, scopedRosterFor(e, next, isPtoAdminUid(docId)), scopedAdminPtoFor(e, next, ptoAdmin, isPtoAdminUid(docId)), !!e.isManager);
     }
   }, [entries, ptoAdmin]);
   const mirrorTarget = useCallback((empId) => {
-    const docId = resolveUidForEmp(empId, entries);
+    const docId = ownDocForEmp(empId, entries);
     return docId && !String(docId).startsWith("emp_") ? docId : null;
   }, [entries]);
   const persistSalaries = useCallback(async (map) => {

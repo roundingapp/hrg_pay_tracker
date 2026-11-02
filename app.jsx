@@ -261,24 +261,33 @@ async function saveCertForUid(uid, periodIdx, cap, atISO) {
 // maps her managed staff here, so the self-stamped marker wins). Populated on every
 // owner loadAllEntries; consumed by resolveUidForEmp for mirrors and View-as.
 let UID_BY_EMP = {};
+let DOC_OWNER = {};   // uid doc → the empId its own login stamped into it
 const resolveUidForEmp = (empId, entries) =>
   UID_BY_EMP[empId] || ((entries || []).find(e => e.empId === empId) || {})._uid || null;
+// The person's OWN login doc, for mirror writes (roster/PTO/salary/bonus). Never a doc stamped
+// by someone else: manager-entered staff with no login of their own (Vivien) resolve via their
+// entries to the MANAGER's doc, and writing their mirror there wiped Inez's roster (10/21/26).
+const ownDocForEmp = (empId, entries) => {
+  const d = resolveUidForEmp(empId, entries);
+  return d && (!DOC_OWNER[d] || DOC_OWNER[d] === empId) ? d : null;
+};
 // owner-only: merge every NP's entries, tagging each with the uid doc it came from
 async function loadAllEntries() {
   try {
     const snap = await window._fs.getDocs(window._fs.collection(window._db, "paytracker_entries"));
-    const all = [], byEntries = {}, byMarker = {};
+    const all = [], byEntries = {}, byMarker = {}, owner = {};
     snap.forEach(d => {
       if (d.id === SALARY_DOC || d.id === ADJ_DOC) return;   // owner-only object-valued docs live here too — skip
       const data = d.data() || {};
       const isEmpDoc = String(d.id).startsWith("emp_");      // legacy empId-keyed docs aren't real logins
-      if (data.empId && !isEmpDoc) byMarker[data.empId] = d.id;
+      if (data.empId && !isEmpDoc) { byMarker[data.empId] = d.id; owner[d.id] = data.empId; }
       const v = data.value;
       if (!Array.isArray(v)) return;     // defensive: only per-NP entry arrays (never an object-valued doc)
       if (!isEmpDoc) v.forEach(e => { if (e && e.empId) byEntries[e.empId] = d.id; });
       v.forEach(e => all.push({ ...e, _uid: d.id }));
     });
     UID_BY_EMP = { ...byEntries, ...byMarker };   // marker beats entry-derived (manager docs)
+    DOC_OWNER = owner;
     return all;
   } catch (e) { console.error("all-entries read failed", e); return []; }
 }
@@ -844,10 +853,10 @@ function App() {
     // a PTO request also reveals someone's uid (their pto doc is uid-keyed) — lets the heal
     // reach people whose first-ever write was a PTO request, before they've stamped a marker
     const uidOf = (empId) => {
-      const viaReg = resolveUidForEmp(empId, entries);
+      const viaReg = ownDocForEmp(empId, entries);
       if (viaReg && !String(viaReg).startsWith("emp_")) return viaReg;
       const viaPto = (allPto.find(r => r.empId === empId && r._uid && !String(r._uid).startsWith("emp_")) || {})._uid;
-      return viaPto || null;
+      return viaPto && (!DOC_OWNER[viaPto] || DOC_OWNER[viaPto] === empId) ? viaPto : null;
     };
     (async () => {
       for (const [empId, annual] of Object.entries(salaries || {})) {
@@ -883,14 +892,14 @@ function App() {
     await savePublicRoster(next);
     // re-push each person's scoped roster/PTO mirror so their own view reflects the edit
     for (const e of next) {
-      const docId = resolveUidForEmp(e.id, entries);
+      const docId = ownDocForEmp(e.id, entries);
       if (docId && !String(docId).startsWith("emp_"))
         await saveMyMirror(docId, scopedRosterFor(e, next, isPtoAdminUid(docId)), scopedAdminPtoFor(e, next, ptoAdmin, isPtoAdminUid(docId)), !!e.isManager);
     }
   }, [entries, ptoAdmin]);
   // mirrors only go to REAL login docs (never legacy emp_-keyed docs staff can't read)
   const mirrorTarget = useCallback((empId) => {
-    const docId = resolveUidForEmp(empId, entries);
+    const docId = ownDocForEmp(empId, entries);
     return docId && !String(docId).startsWith("emp_") ? docId : null;
   }, [entries]);
   const persistSalaries = useCallback(async (map) => {
